@@ -1,0 +1,15 @@
+{
+  "run_id": "run_SHOP_3_1772133269",
+  "timestamp": "2026-02-27T03:14:29.626542",
+  "ticker": "SHOP",
+  "peak_rank": 3,
+  "peak_date": "2021-11-05",
+  "evidence_fingerprint": 7696763439132758115,
+  "evidence_count": 123,
+  "fidelity_score": 91,
+  "coverage_completeness": 100,
+  "summary_stats": {
+    "avg_si": 14.19695890410959,
+    "max_vol": 1.0139
+  }
+}

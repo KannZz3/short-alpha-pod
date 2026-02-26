@@ -1,0 +1,15 @@
+{
+  "run_id": "run_AFRM_1_1772133269",
+  "timestamp": "2026-02-27T03:14:29.357932",
+  "ticker": "AFRM",
+  "peak_rank": 1,
+  "peak_date": "2021-08-31",
+  "evidence_fingerprint": -2023889090133768061,
+  "evidence_count": 135,
+  "fidelity_score": 91,
+  "coverage_completeness": 100,
+  "summary_stats": {
+    "avg_si": 11.086776255707763,
+    "max_vol": 0.9937
+  }
+}

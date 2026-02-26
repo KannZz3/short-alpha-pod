@@ -1,0 +1,15 @@
+{
+  "run_id": "run_TSLA_1_1772133269",
+  "timestamp": "2026-02-27T03:14:29.652599",
+  "ticker": "TSLA",
+  "peak_rank": 1,
+  "peak_date": "2021-01-11",
+  "evidence_fingerprint": -1168337209576587807,
+  "evidence_count": 130,
+  "fidelity_score": 91,
+  "coverage_completeness": 100,
+  "summary_stats": {
+    "avg_si": 12.618246575342466,
+    "max_vol": 0.9966
+  }
+}
