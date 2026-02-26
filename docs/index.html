@@ -3068,26 +3068,30 @@
                                         <rect key={i} x={getX(i) - 2} y={height - p - 10} width={4} height={4} fill="#555" opacity={0.3} />
                                     )))}
 
-                                    {/* Swan/News Flag Markers
-                                         Root cause of overlap was:
-                                         - Case A: per-item (per-CSV-row) instead of per-day
-                                         - Case D: React key was index i, not stable dayKey
-                                         Fix: use DataHub.getNewsSignalFlags() for per-day bucketing.
-                                         At most ONE flag per unique calendar-day within the window. */}
+                                    {/* ── Adaptive Event Marker System ──────────────────────────────────
+                                         Overlap becomes unavoidable when the chart holds many days:
+                                           pixelsPerDay = xMax / numDays
+                                           At 365d view (xMax≈740): ppd ≈ 2px → a 16px icon spans 8 days → guaranteed stacking.
+
+                                         Three modes switch automatically based on pixel density:
+                                           Individual  (ppd >= 14): original individual red flags
+                                           Cluster     (6 <= ppd < 14): one badge per group of adjacent events
+                                           DensityBand (ppd < 6): thin colour strip above heatmap bands
+
+                                         Internal diagnostic: console.debug('[FLAGS]') logs ppd, flagCount, overlapRisk.
+                                         Tune thresholds: PPD_CLUSTER=14, PPD_BAND=6, CLUSTER_MERGE_PX=12 below.
+                                    ─────────────────────────────────────────────────────────────────── */}
                                     {runSafe('enableBlackSwanClickLinking', () => {
-                                        // Build flag set: deduped per calendar day in utc
+                                        /* ── 0. Build unified deduped event list (same as before) ── */
                                         const winStart = activePeak?.windowStart || filteredData[0]?.d;
                                         const winEnd = activePeak?.windowEnd || filteredData[filteredData.length - 1]?.d;
                                         const newsFlags = DataHub.getNewsSignalFlags(ticker, winStart, winEnd);
 
-                                        // Also collect per-day swan markers from filteredData (from computeRealIndices)
-                                        // Dedupe: one entry per dayKey using a Map
                                         const swanMap = new Map();
                                         safeArr(filteredData).forEach((d, i) => {
                                             if (d.swan === 1 && !swanMap.has(d.d)) swanMap.set(d.d, i);
                                         });
 
-                                        // Merge newsFlags + swanMap into a unified deduped set
                                         const allDayKeys = new Map(); // dayKey -> { idx, reason, isSwanFromData }
                                         newsFlags.forEach(f => {
                                             const idx = filteredData.findIndex(d => d.d === f.dayKey);
@@ -3098,23 +3102,111 @@
                                             else allDayKeys.get(dayKey).isSwanFromData = true;
                                         });
 
+                                        const events = Array.from(allDayKeys.entries())
+                                            .map(([dayKey, ev]) => ({ dayKey, ...ev, cx: getX(ev.idx) }))
+                                            .sort((a, b) => a.idx - b.idx);
+
+                                        /* ── 1. Compute pixel density & choose mode ── */
+                                        const numDays = Math.max(filteredData.length, 1);
+                                        const ppd = xMax / numDays; // pixels per day
+                                        const PPD_INDIVIDUAL = 14;        // >= this: individual icons
+                                        const PPD_CLUSTER = 6;         // >= this: cluster badges; else density band
+                                        const CLUSTER_MERGE_PX = 12;      // merge events within this many pixels
+
+                                        // Internal diagnostic log (non-blocking)
+                                        const overlapRisk = ppd < 16 ? (ppd < 6 ? 'HIGH' : 'MEDIUM') : 'LOW';
+                                        console.debug('[FLAGS] diag', { ppd: ppd.toFixed(1), flagCount: events.length, mode: ppd >= PPD_INDIVIDUAL ? 'INDIVIDUAL' : ppd >= PPD_CLUSTER ? 'CLUSTER' : 'BAND', overlapRisk });
+
+                                        /* ── MODE A: Individual flags (unchanged look) ── */
+                                        if (ppd >= PPD_INDIVIDUAL) {
+                                            return (<>
+                                                {events.map(({ dayKey, cx, reason, isSwanFromData }) => {
+                                                    const stableKey = `${ticker}-${winStart}-${winEnd}-${dayKey}-FLAG`;
+                                                    const yPos = p + (isSwanFromData ? 8 : 12);
+                                                    return (
+                                                        <g key={stableKey}
+                                                            transform={`translate(${cx}, ${yPos})`}
+                                                            style={{ cursor: 'pointer' }}
+                                                            onClick={() => { setSelectedDate(dayKey); setTab('evidence'); }}
+                                                        >
+                                                            <circle r="8" fill="rgba(239,68,68,0.2)" />
+                                                            <Icons.Flag color={reason.includes('SWAN') ? '#ef4444' : '#f59e0b'} />
+                                                        </g>
+                                                    );
+                                                })}
+                                            </>);
+                                        }
+
+                                        /* ── MODE B: Cluster Badges ── */
+                                        if (ppd >= PPD_CLUSTER) {
+                                            // Greedy merge: group events whose cx is within CLUSTER_MERGE_PX of previous
+                                            const clusters = [];
+                                            events.forEach(ev => {
+                                                const last = clusters[clusters.length - 1];
+                                                if (last && Math.abs(ev.cx - last.cx) <= CLUSTER_MERGE_PX) {
+                                                    last.events.push(ev);
+                                                    last.cx = last.events.reduce((s, e) => s + e.cx, 0) / last.events.length; // avg x
+                                                    last.hasSwan = last.hasSwan || ev.isSwanFromData;
+                                                } else {
+                                                    clusters.push({ cx: ev.cx, events: [ev], hasSwan: ev.isSwanFromData });
+                                                }
+                                            });
+
+                                            return (<>
+                                                {clusters.map((cl, ci) => {
+                                                    const n = cl.events.length;
+                                                    const firstDay = cl.events[0].dayKey;
+                                                    const stableKey = `${ticker}-${winStart}-${winEnd}-${firstDay}-CLUSTER`;
+                                                    const dotColor = cl.hasSwan ? '#ef4444' : '#f59e0b';
+                                                    const yPos = p + 6;
+                                                    return (
+                                                        <g key={stableKey}
+                                                            transform={`translate(${cl.cx}, ${yPos})`}
+                                                            style={{ cursor: 'pointer' }}
+                                                            onClick={() => { setSelectedDate(firstDay); setTab('evidence'); }}
+                                                        >
+                                                            <title>{n > 1 ? `${n} events (${cl.events.map(e => e.dayKey).join(', ')}) – click to inspect` : `${firstDay}: ${cl.events[0].reason}`}</title>
+                                                            <circle r="9" fill={`${dotColor}33`} stroke={dotColor} strokeWidth="1.5" />
+                                                            <text textAnchor="middle" dy="0.35em" fontSize="7" fontWeight="800" fill={dotColor}>{n > 1 ? n : '!'}</text>
+                                                        </g>
+                                                    );
+                                                })}
+                                            </>);
+                                        }
+
+                                        /* ── MODE C: Density Band ── */
+                                        // One rect per day in filteredData, height=6px, y just above heatmap bands
+                                        // Intensity = clamp(events on that day / 3, 0..1) for visual saturation
+                                        const eventByDay = new Map(events.map(e => [e.dayKey, e]));
+                                        const BAND_Y = height - p - 43; // 2px gap above heatmap news band
+                                        const dayW = xMax / (numDays - 1 || 1);
+
                                         return (<>
-                                            {Array.from(allDayKeys.entries()).map(([dayKey, { idx, reason, isSwanFromData }]) => {
-                                                const cx = getX(idx);
-                                                // Stable key: ticker + window + dayKey (never just index)
-                                                const stableKey = `${ticker}-${winStart}-${winEnd}-${dayKey}-FLAG`;
-                                                const yPos = p + (isSwanFromData ? 8 : 12); // slight y-offset for SWAN vs NEWS
+                                            {/* Thin density strip */}
+                                            {safeArr(filteredData).map((d, i) => {
+                                                const ev = eventByDay.get(d.d);
+                                                if (!ev && (d.noise_index || 0) < 55) return null; // skip low-signal days
+                                                const intensity = ev ? 0.8 : Math.min(0.4, (d.noise_index || 0) / 100 * 0.5);
+                                                const fill = ev ? (ev.hasSwan ? '#ef4444' : '#f59e0b') : '#3b82f6';
+                                                const xPos = getX(i) - dayW / 2;
                                                 return (
-                                                    <g key={stableKey}
-                                                        transform={`translate(${cx}, ${yPos})`}
-                                                        style={{ cursor: 'pointer' }}
-                                                        onClick={() => { setSelectedDate(dayKey); setTab('evidence'); }}
+                                                    <rect key={`band-${d.d}`}
+                                                        x={xPos} y={BAND_Y} width={Math.max(dayW, 1)} height={6}
+                                                        fill={fill} opacity={intensity}
+                                                        style={{ cursor: ev ? 'pointer' : 'default' }}
+                                                        onClick={ev ? () => { setSelectedDate(d.d); setTab('evidence'); } : undefined}
                                                     >
-                                                        <circle r="8" fill="rgba(239,68,68,0.2)" />
-                                                        <Icons.Flag color={reason.includes('SWAN') ? '#ef4444' : '#f59e0b'} />
-                                                    </g>
+                                                        <title>{d.d}{ev ? ` · ${ev.reason}` : ` · noise=${(d.noise_index || 0).toFixed(0)}`}</title>
+                                                    </rect>
                                                 );
                                             })}
+                                            {/* Day labels for starred events only (every 3rd to avoid crowding) */}
+                                            {events.filter((_, i) => i % Math.max(1, Math.ceil(events.length / 4)) === 0).map(ev => (
+                                                <text key={`bl-${ev.dayKey}`}
+                                                    x={ev.cx} y={BAND_Y - 2}
+                                                    textAnchor="middle" fontSize="5" fill="#6b7280" opacity="0.7"
+                                                >{ev.dayKey.slice(5)}</text>
+                                            ))}
                                         </>);
                                     }, (
                                         // Fallback when flag disabled: deduped dots without interaction
