@@ -684,6 +684,80 @@
                 display: inline !important;
             }
         }
+
+        .agent-status-strip {
+            background: rgba(16, 185, 129, 0.05);
+            border-bottom: 1px solid var(--primary-muted);
+            padding: 8px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.7rem;
+            z-index: 1000;
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        .animate-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        .provenance-drawer {
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 400px;
+            max-width: 100vw;
+            background: rgba(3, 7, 18, 0.95);
+            backdrop-filter: blur(16px);
+            border-left: 1px solid var(--border);
+            z-index: 9999;
+            transform: translateX(100%);
+            transition: transform 0.3s ease;
+            box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .provenance-drawer.open {
+            transform: translateX(0);
+        }
+
+        .econ-theory-card {
+            background: rgba(245, 158, 11, 0.05);
+            /* amber-500/5 */
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .theory-rule-row {
+            display: grid;
+            grid-template-columns: 40px auto 60px;
+            gap: 10px;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.65rem;
+        }
+
+        .theory-rule-row:last-child {
+            border-bottom: none;
+        }
     </style>
 </head>
 
@@ -1216,6 +1290,103 @@
             }
         };
 
+        // --- ORCHESTRATOR & AGENTS ---
+
+        const GroundTruthAgent = (ctx) => {
+            return new Promise((resolve) => {
+                setTimeout(() => {
+                    // Mapped to unified EvidenceItem schema
+                    const mapNewsToEvidence = (pool) => pool.map((n, i) => ({
+                        id: `ev-inst-${i}`,
+                        ticker: ctx.ticker,
+                        source_type: 'institutional',
+                        provider: n.s,
+                        title: n.t,
+                        url: n.url,
+                        published_at_utc: `${n.d}T00:00:00Z`,
+                        retrieved_at_utc: new Date().toISOString(),
+                        excerpt: `Institutional signal detected: ${n.t}.`,
+                        tags: n.theme ? [n.theme] : [],
+                        metrics: { shock: parseFloat((n.v * Math.abs(n.score || 0)).toFixed(2)), sentiment: n.score || 0, engagement: n.v },
+                        quality_flags: n.demo ? ["DEMO_INPUT_MISSING"] : [],
+                        raw_ref: n,
+                        mode: n.demo ? 'DEMO' : 'LIVE'
+                    }));
+
+                    const mapRetailToEvidence = (pool) => pool.map((r, i) => ({
+                        id: `ev-ret-${i}`,
+                        ticker: ctx.ticker,
+                        source_type: r.p === 'reddit' ? 'retail' : 'noise', // simple heuristics
+                        provider: r.p,
+                        title: `Retail chatter on ${r.p}`,
+                        url: r.url,
+                        published_at_utc: `${r.d}T00:00:00Z`,
+                        retrieved_at_utc: new Date().toISOString(),
+                        excerpt: r.msg,
+                        tags: r.tags || [],
+                        metrics: { shock: 0, sentiment: r.pol || 0, engagement: r.eng || 0 },
+                        quality_flags: r.demo ? ["DEMO_INPUT_MISSING"] : [],
+                        raw_ref: r,
+                        mode: r.demo ? 'DEMO' : 'LIVE'
+                    }));
+
+                    const evidenceNews = mapNewsToEvidence(ctx.newsData);
+                    const evidenceRetail = mapRetailToEvidence(ctx.retailData);
+
+                    // Econ Theory Checks Execution
+                    const checks = [];
+                    // SI-1 Example Check
+                    checks.push({
+                        rule_id: 'SI-1',
+                        pass: true, // Assuming deterministic pass for demo unless configured otherwise
+                        inputs: { short_interest: 'High', avg_daily_volume: 'Normal' },
+                        threshold: '> 3.0 days_to_cover',
+                        rationale_1line: 'Short interest implies significant days-to-cover ratio.',
+                        severity: 'WARN'
+                    });
+                    // SI-2 Example Check
+                    const peakRegime = ctx.activePeak ? ctx.activePeak.regime : 'NORMAL';
+                    const si2Pass = peakRegime !== 'LOW';
+                    checks.push({
+                        rule_id: 'SI-2',
+                        pass: si2Pass,
+                        inputs: { regime: peakRegime },
+                        threshold: 'regime != LOW',
+                        rationale_1line: 'Float-adjusted SI indicates actionable squeeze potential.',
+                        severity: 'FAIL'
+                    });
+
+                    const theory_verdict = checks.some(c => !c.pass && c.severity === 'FAIL') ? 'FAIL' :
+                        (checks.some(c => !c.pass && c.severity === 'WARN') ? 'WARN' : 'PASS');
+
+                    resolve({
+                        evidenceNews,
+                        evidenceRetail,
+                        theoryChecks: checks,
+                        theoryVerdict: theory_verdict
+                    });
+                }, 800); // simulate async retrieval -> normalize -> validate
+            });
+        };
+
+        const SyntheticScenarioAgent = (ctx) => {
+            return new Promise((resolve) => {
+                setTimeout(() => {
+                    const params = ctx.params || { buildup: 1.0, severity: 1.0, freq: 1.0, intensity: 1.2 };
+                    const scenario = ctx.scenario || 'mild';
+                    const syntheticData = DataHub.getSynthetic(ctx.ticker, scenario, params);
+                    const auditData = DataHub.getAudit(ctx.ticker);
+
+                    resolve({
+                        syntheticData,
+                        auditData,
+                        scenarioSummary: { scenario, days: syntheticData.length }
+                    });
+                }, 800);
+            });
+        };
+
+
         const CorrelationItem = ({ label, val }) => (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', marginBottom: 6 }}>
                 <span style={{ opacity: 0.6 }}>{label}:</span>
@@ -1403,6 +1574,18 @@
             const filteredData = useMemo(() => merged.filter(d => d.d >= range.start && d.d <= range.end), [merged, range]);
             const filterDate = hoverIdx !== null ? filteredData[hoverIdx]?.d : (selectedDate || activePeak.date);
 
+            const [runContext, setRunContext] = useState({
+                ticker: "TSLA",
+                orchestratorStatus: "Idle", // Idle | Searching | Validating | Synthesizing | StressTesting | Complete
+                activeAgent: null,
+                evidenceNews: [],
+                evidenceRetail: [],
+                theoryChecks: [],
+                theoryVerdict: null,
+                runArtifact: null
+            });
+            const [provenanceItem, setProvenanceItem] = useState(null); // Selected item for drawer
+
             useEffect(() => {
                 const init = async () => {
                     const dataUrl = "./data/Stock Short Interest Data.csv";
@@ -1424,6 +1607,63 @@
                 init();
                 window.__POD_STATE.ticker = ticker;
             }, [ticker]);
+
+            // Re-run Orchestrator when ticker or peak changes
+            useEffect(() => {
+                if (!activePeak) return; // Wait for initialization
+
+                const runOrchestrator = async () => {
+                    setRunContext(prev => ({ ...prev, orchestratorStatus: "Searching", activeAgent: "GroundTruthAgent" }));
+
+                    const ctxData = {
+                        ticker,
+                        activePeak,
+                        newsData: DataHub.getNews(ticker),
+                        retailData: DataHub.getRetail(ticker)
+                    };
+
+                    setRunContext(prev => ({ ...prev, orchestratorStatus: "Validating" }));
+                    const gtResult = await GroundTruthAgent(ctxData);
+
+                    setRunContext(prev => ({
+                        ...prev,
+                        orchestratorStatus: "Synthesizing",
+                        activeAgent: "SyntheticScenarioAgent",
+                        evidenceNews: gtResult.evidenceNews,
+                        evidenceRetail: gtResult.evidenceRetail,
+                        theoryChecks: gtResult.theoryChecks,
+                        theoryVerdict: gtResult.theoryVerdict
+                    }));
+
+                    const synthCtxData = {
+                        ticker,
+                        params,
+                        scenario
+                    };
+
+                    setRunContext(prev => ({ ...prev, orchestratorStatus: "StressTesting" }));
+                    const synthResult = await SyntheticScenarioAgent(synthCtxData);
+
+                    setRunContext(prev => ({
+                        ...prev,
+                        orchestratorStatus: "Complete",
+                        activeAgent: "Orchestrator",
+                        runArtifact: {
+                            id: `run-${Date.now()}`,
+                            timestamp: new Date().toISOString(),
+                            inputs: { ticker, rankMode, activePeak, range },
+                            theory_checks: gtResult.theoryChecks,
+                            theory_verdict: gtResult.theoryVerdict,
+                            lag_validation: dynamicValidation?.hypothesis,
+                            tradable_probability: dynamicValidation?.tradableProb,
+                            scenario_summary: synthResult.scenarioSummary,
+                            final_verdict: (gtResult.theoryVerdict === 'FAIL' || dynamicValidation?.hypothesis === 'FAIL') ? 'REJECTED' : 'APPROVED'
+                        }
+                    }));
+                };
+
+                runOrchestrator();
+            }, [ticker, activePeak, rankMode, scenario, params]); // Reduced dependencies for orchestrator
 
             useEffect(() => {
                 const skel = document.getElementById('skeleton-ui');
@@ -1621,16 +1861,8 @@
                 <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)' }}>
                     <WeChatBanner />
                     <div className="app-header-container">
-                        {/* Share / Resume Header */}
-                        <div className="share-header" style={{
-                            background: 'rgba(16, 185, 129, 0.05)',
-                            borderBottom: '1px solid var(--primary-muted)',
-                            padding: '8px 20px',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            fontSize: '0.7rem'
-                        }}>
+                        {/* Share / Resume Header - Kept existing but replaced inner with Agent Status Strip logic */}
+                        <div className="agent-status-strip">
                             <div style={{ display: 'flex', gap: 15, alignItems: 'center' }}>
                                 <span style={{ fontWeight: 800, color: 'var(--primary)' }}>DEPLOY_READY</span>
                                 <div style={{ display: 'flex', gap: 10 }}>
@@ -1639,8 +1871,34 @@
                                     <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>PDF Report</a>
                                 </div>
                             </div>
-                            <div style={{ opacity: 0.6 }}>
-                                v1.0.10-wechat-parity| <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
+
+                            <div style={{ flex: 1, textAlign: 'center', opacity: runContext.orchestratorStatus === 'Complete' ? 0.7 : 1 }}>
+                                {runContext.orchestratorStatus !== 'Complete' && <span className="animate-pulse" style={{ color: '#10b981', marginRight: '6px' }}>●</span>}
+                                <span style={{ color: 'var(--text-muted)' }}>{runContext.activeAgent || 'ORCHESTRATOR'}: </span>
+                                <strong style={{ color: runContext.orchestratorStatus === 'Complete' ? '#10b981' : '#f59e0b' }}>
+                                    {runContext.orchestratorStatus.toUpperCase()}
+                                </strong>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                                {runContext.runArtifact && (
+                                    <button
+                                        className="tab-btn"
+                                        style={{ fontSize: '0.6rem', padding: '2px 8px', border: '1px solid var(--primary)', color: 'var(--primary)', borderRadius: '4px' }}
+                                        onClick={() => {
+                                            const a = document.createElement("a");
+                                            const file = new Blob([JSON.stringify(runContext.runArtifact, null, 2)], { type: 'application/json' });
+                                            a.href = URL.createObjectURL(file);
+                                            a.download = `run_artifact_${ticker}_${Date.now()}.json`;
+                                            a.click();
+                                        }}
+                                    >
+                                        EXPORT RUN_ARTIFACT
+                                    </button>
+                                )}
+                                <div style={{ opacity: 0.6 }}>
+                                    v1.0.11| <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
+                                </div>
                             </div>
                         </div>
 
@@ -1980,57 +2238,135 @@
                                             </div>
                                         ))}
 
+                                        {/* ECON THEORY CHECKS CARD */}
+                                        {runContext.theoryChecks && runContext.theoryChecks.length > 0 && (
+                                            <div className="econ-theory-card">
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                                    <h3 style={{ fontSize: '0.75rem', color: '#f59e0b', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                        <Icons.Shield size={14} color="#f59e0b" /> ECON THEORY CHECKS
+                                                    </h3>
+                                                    <span style={{
+                                                        fontWeight: 800,
+                                                        fontSize: '0.7rem',
+                                                        padding: '2px 8px',
+                                                        borderRadius: '4px',
+                                                        backgroundColor: runContext.theoryVerdict === 'PASS' ? 'rgba(16,185,129,0.2)' : (runContext.theoryVerdict === 'WARN' ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)'),
+                                                        color: runContext.theoryVerdict === 'PASS' ? '#10b981' : (runContext.theoryVerdict === 'WARN' ? '#f59e0b' : '#ef4444')
+                                                    }}>
+                                                        VERDICT: {runContext.theoryVerdict}
+                                                    </span>
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                    {runContext.theoryChecks.map((check, idx) => (
+                                                        <div key={idx} className="theory-rule-row">
+                                                            <div style={{ fontWeight: 800, color: 'var(--text-muted)' }}>{check.rule_id}</div>
+                                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                <span style={{ fontWeight: 500 }}>{check.rationale_1line}</span>
+                                                                <span style={{ opacity: 0.5, fontSize: '0.55rem' }}>Threshold: {check.threshold} | Inputs: {JSON.stringify(check.inputs)}</span>
+                                                            </div>
+                                                            <div style={{
+                                                                textAlign: 'right',
+                                                                fontWeight: 800,
+                                                                color: check.pass ? '#10b981' : (check.severity === 'WARN' ? '#f59e0b' : '#ef4444')
+                                                            }}>
+                                                                {check.pass ? 'PASS' : check.severity}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
                                         <div className="evidence-explorer-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                                             {/* Institutional Column */}
                                             <div style={{ minWidth: 0 }}>
                                                 <h3 style={{ fontSize: '0.75rem', borderBottom: '2px solid #3b82f6', display: 'flex', justifyContent: 'space-between', paddingBottom: 5, marginBottom: 12 }}>
-                                                    INSTITUTIONAL SIGNAL <span>{evidence.news.length} ITEMS</span>
+                                                    INSTITUTIONAL SIGNAL <span>{runContext.evidenceNews.length ? runContext.evidenceNews.length : evidence.news.length} ITEMS</span>
                                                 </h3>
                                                 {evidence.news.length === 0 && <div className="glass" style={{ padding: '1rem', opacity: 0.5 }}>No institutional signals in this {viewMode}.</div>}
-                                                {safeArr(evidence.news).map((n, i) => (
-                                                    <div key={i} className="glass" style={{ padding: '0.8rem', marginBottom: '10px', borderLeft: `3px solid ${n.score > 0 ? '#10b981' : '#ef4444'}`, minWidth: 0, overflow: 'hidden' }}>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', marginBottom: 6, gap: 10, minWidth: 0 }}>
-                                                            <span style={{ opacity: 0.6, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                                                                {n.s} <Icons.ExternalLink />
-                                                            </span>
-                                                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', minWidth: 0 }}>
-                                                                {n.demo && <span style={{ color: '#fbbf24', fontSize: '0.55rem', fontWeight: 800 }}>DEMO</span>}
-                                                                {viewMode === 'window' && <span style={{ opacity: 0.4, fontSize: '0.55rem' }}>{n.d}</span>}
-                                                                {runSafe('enableHeadlineClustering', () => n.theme && <span className="tag-pill" style={{ fontSize: '0.5rem', padding: '1px 4px' }}>{n.theme.toUpperCase()}</span>)}
-                                                                {runSafe('enableInstitutionalShockScore', () => (
-                                                                    <span style={{ color: '#60a5fa', fontWeight: 800, fontSize: '0.55rem' }}>SHOCK: {(n.v * Math.abs(n.score) * 1.5).toFixed(1)}</span>
-                                                                ))}
-                                                                <span style={{ fontWeight: 800, color: n.score > 0 ? '#10b981' : '#ef4444', flexShrink: 0 }}>{n.score > 0 ? '+' : ''}{n.score.toFixed(2)}</span>
+                                                {safeArr(runContext.evidenceNews.length ? runContext.evidenceNews : evidence.news).map((n, i) => {
+                                                    // Map both new format and old format for compatibility
+                                                    const isNew = !!n.metrics;
+                                                    const score = isNew ? n.metrics.sentiment : n.score;
+                                                    const n_s = isNew ? n.provider : n.s;
+                                                    const n_d = isNew ? n.published_at_utc.split('T')[0] : n.d;
+                                                    const n_theme = isNew ? n.tags[0] : n.theme;
+                                                    const n_v = isNew ? n.metrics.engagement : n.v;
+                                                    const n_t = isNew ? n.title : n.t;
+                                                    const isDemo = isNew ? n.quality_flags && n.quality_flags.includes("DEMO_INPUT_MISSING") : n.demo;
+
+                                                    return (
+                                                        <div
+                                                            key={i}
+                                                            className="glass"
+                                                            style={{ padding: '0.8rem', marginBottom: '10px', borderLeft: `3px solid ${score > 0 ? '#10b981' : '#ef4444'}`, minWidth: 0, overflow: 'hidden', cursor: isNew ? 'pointer' : 'default', transition: '0.2s' }}
+                                                            onClick={() => isNew && setProvenanceItem(n)}
+                                                            onMouseOver={(e) => isNew && (e.currentTarget.style.borderColor = 'var(--primary)')}
+                                                            onMouseOut={(e) => isNew && (e.currentTarget.style.borderColor = 'var(--border)')}
+                                                            title={isNew ? "Click to view Provenance" : undefined}
+                                                        >
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', marginBottom: 6, gap: 10, minWidth: 0 }}>
+                                                                <span style={{ opacity: 0.6, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                                                                    {n_s} <Icons.ExternalLink />
+                                                                </span>
+                                                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', minWidth: 0 }}>
+                                                                    {isDemo && <span style={{ color: '#fbbf24', fontSize: '0.55rem', fontWeight: 800 }}>DEMO</span>}
+                                                                    {viewMode === 'window' && <span style={{ opacity: 0.4, fontSize: '0.55rem' }}>{n_d}</span>}
+                                                                    {runSafe('enableHeadlineClustering', () => n_theme && <span className="tag-pill" style={{ fontSize: '0.5rem', padding: '1px 4px' }}>{n_theme.toUpperCase()}</span>)}
+                                                                    {runSafe('enableInstitutionalShockScore', () => (
+                                                                        <span style={{ color: '#60a5fa', fontWeight: 800, fontSize: '0.55rem' }}>SHOCK: {(isNew ? n.metrics.shock : (n_v * Math.abs(score) * 1.5).toFixed(1))}</span>
+                                                                    ))}
+                                                                    <span style={{ fontWeight: 800, color: score > 0 ? '#10b981' : '#ef4444', flexShrink: 0 }}>{score > 0 ? '+' : ''}{score.toFixed(2)}</span>
+                                                                </div>
                                                             </div>
+                                                            <div style={{ fontSize: '0.75rem', fontWeight: 500, lineHeight: 1.3, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{n_t}</div>
                                                         </div>
-                                                        <div style={{ fontSize: '0.75rem', fontWeight: 500, lineHeight: 1.3, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{n.t}</div>
-                                                    </div>
-                                                ))}
+                                                    )
+                                                })}
                                             </div>
 
                                             {/* Retail Column */}
                                             <div style={{ minWidth: 0 }}>
                                                 <h3 style={{ fontSize: '0.75rem', borderBottom: '2px solid #8b5cf6', display: 'flex', justifyContent: 'space-between', paddingBottom: 5, marginBottom: 12 }}>
-                                                    RETAIL SENTIMENT <span>{evidence.retail.length} ITEMS</span>
+                                                    RETAIL SENTIMENT <span>{runContext.evidenceRetail.length ? runContext.evidenceRetail.length : evidence.retail.length} ITEMS</span>
                                                 </h3>
                                                 {evidence.retail.length === 0 && <div className="glass" style={{ padding: '1rem', opacity: 0.5 }}>No retail chatter in this {viewMode}.</div>}
-                                                {safeArr(evidence.retail).map((r, i) => (
-                                                    <div key={i} className="glass" style={{ padding: '0.8rem', marginBottom: '10px', borderLeft: '3px solid #8b5cf6', minWidth: 0, overflow: 'hidden' }}>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', marginBottom: 6, gap: 10, minWidth: 0 }}>
-                                                            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-                                                                <span style={{ opacity: 0.6 }}>{r.p}</span>
-                                                                {r.demo && <span style={{ color: '#fbbf24', fontSize: '0.55rem', fontWeight: 800 }}>DEMO</span>}
+                                                {safeArr(runContext.evidenceRetail.length ? runContext.evidenceRetail : evidence.retail).map((r, i) => {
+                                                    const isNew = !!r.metrics;
+                                                    const r_p = isNew ? r.provider : r.p;
+                                                    const isDemo = isNew ? r.quality_flags && r.quality_flags.includes("DEMO_INPUT_MISSING") : r.demo;
+                                                    const r_d = isNew ? r.published_at_utc.split('T')[0] : r.d;
+                                                    const r_tags = isNew ? r.tags : r.tags;
+                                                    const r_hype = isNew ? r.metrics.engagement : r.hype; // Mapping simplification for UI overlay
+                                                    const r_msg = isNew ? r.excerpt : r.msg;
+                                                    const r_eng = isNew ? r.metrics.engagement : r.eng;
+
+                                                    return (
+                                                        <div
+                                                            key={i}
+                                                            className="glass"
+                                                            style={{ padding: '0.8rem', marginBottom: '10px', borderLeft: '3px solid #8b5cf6', minWidth: 0, overflow: 'hidden', cursor: isNew ? 'pointer' : 'default', transition: '0.2s' }}
+                                                            onClick={() => isNew && setProvenanceItem(r)}
+                                                            onMouseOver={(e) => isNew && (e.currentTarget.style.borderColor = '#8b5cf6')}
+                                                            onMouseOut={(e) => isNew && (e.currentTarget.style.borderColor = 'var(--border)')}
+                                                            title={isNew ? "Click to view Provenance" : undefined}
+                                                        >
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', marginBottom: 6, gap: 10, minWidth: 0 }}>
+                                                                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                                                                    <span style={{ opacity: 0.6 }}>{r_p}</span>
+                                                                    {isDemo && <span style={{ color: '#fbbf24', fontSize: '0.55rem', fontWeight: 800 }}>DEMO</span>}
+                                                                </div>
+                                                                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end', minWidth: 0 }}>
+                                                                    {viewMode === 'window' && <span style={{ opacity: 0.4, fontSize: '0.55rem' }}>{r_d}</span>}
+                                                                    {safeArr(r_tags).map(t => <span key={t} className="tag-pill" style={{ fontSize: '0.5rem', color: '#8b5cf6', borderColor: '#8b5cf6', padding: '1px 4px', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t}</span>)}
+                                                                    <span style={{ fontWeight: 800, color: '#8b5cf6', flexShrink: 0 }}>{r_hype}% HYPE</span>
+                                                                </div>
                                                             </div>
-                                                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end', minWidth: 0 }}>
-                                                                {viewMode === 'window' && <span style={{ opacity: 0.4, fontSize: '0.55rem' }}>{r.d}</span>}
-                                                                {safeArr(r.tags).map(t => <span key={t} className="tag-pill" style={{ fontSize: '0.5rem', color: '#8b5cf6', borderColor: '#8b5cf6', padding: '1px 4px', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t}</span>)}
-                                                                <span style={{ fontWeight: 800, color: '#8b5cf6', flexShrink: 0 }}>{r.hype}% HYPE</span>
-                                                            </div>
+                                                            <div style={{ fontSize: '0.75rem', fontStyle: 'italic', opacity: 0.9, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>"{r_msg}"</div>
+                                                            <div style={{ fontSize: '0.55rem', opacity: 0.4, marginTop: 4 }}>ENGAGEMENT: {r_eng || 0} units</div>
                                                         </div>
-                                                        <div style={{ fontSize: '0.75rem', italic: true, opacity: 0.9, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>"{r.msg}"</div>
-                                                        <div style={{ fontSize: '0.55rem', opacity: 0.4, marginTop: 4 }}>ENGAGEMENT: {r.eng || 0} units</div>
-                                                    </div>
-                                                ))}
+                                                    )
+                                                })}
                                             </div>
                                         </div>
 
@@ -2139,18 +2475,28 @@
                                                             </div>
                                                         </div>
 
-                                                        {runSafe('enableTradableProbabilityLayer', () => (
-                                                            <div className="glass" style={{ padding: '0.8rem', background: 'rgba(16, 185, 129, 0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                                <div>
-                                                                    <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#10b981' }}>TRADABLE PROBABILITY LAYER</div>
-                                                                    <div style={{ fontSize: '0.55rem', opacity: 0.7 }}>P(Squeeze_Spike_48h | Current Noise & Crowding)</div>
+                                                        {runSafe('enableTradableProbabilityLayer', () => {
+                                                            const isGated = runContext.theoryVerdict === 'FAIL' || validation.hypothesis === 'FAIL';
+                                                            const gateReason = runContext.theoryVerdict === 'FAIL' ? 'ECON THEORY FAIL' : 'LAG HYPOTHESIS FAIL';
+
+                                                            return (
+                                                                <div className="glass" style={{ padding: '0.8rem', background: isGated ? 'rgba(239, 68, 68, 0.05)' : 'rgba(16, 185, 129, 0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: isGated ? 0.6 : 1 }}>
+                                                                    <div>
+                                                                        <div style={{ fontSize: '0.75rem', fontWeight: 800, color: isGated ? '#ef4444' : '#10b981' }}>{isGated ? 'TRADABILITY GATED' : 'TRADABLE PROBABILITY LAYER'}</div>
+                                                                        <div style={{ fontSize: '0.55rem', opacity: 0.7 }}>{isGated ? `REASON: ${gateReason}` : 'P(Squeeze_Spike_48h | Current Noise & Crowding)'}</div>
+                                                                        {isGated && runContext.theoryVerdict === 'FAIL' && (
+                                                                            <div style={{ fontSize: '0.45rem', color: '#ef4444', marginTop: 4 }}>
+                                                                                Violating Rules: {runContext.theoryChecks.filter(c => !c.pass && c.severity === 'FAIL').map(c => c.rule_id).join(', ')}
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                    <div style={{ textAlign: 'right' }}>
+                                                                        <div style={{ fontSize: '1.2rem', fontWeight: 900, color: isGated ? '#ef4444' : '#10b981', textDecoration: isGated ? 'line-through' : 'none' }}>{(validation?.tradableProb * 100).toFixed(0)}%</div>
+                                                                        <div style={{ fontSize: '0.45rem', opacity: 0.5 }}>HIT RATE (TOP DECILE): {(validation?.hitRate * 100).toFixed(1)}%</div>
+                                                                    </div>
                                                                 </div>
-                                                                <div style={{ textAlign: 'right' }}>
-                                                                    <div style={{ fontSize: '1.2rem', fontWeight: 900, color: '#10b981' }}>{(validation?.tradableProb * 100).toFixed(0)}%</div>
-                                                                    <div style={{ fontSize: '0.45rem', opacity: 0.5 }}>HIT RATE (TOP DECILE): {(validation?.hitRate * 100).toFixed(1)}%</div>
-                                                                </div>
-                                                            </div>
-                                                        ))}
+                                                            )
+                                                        })}
 
                                                         {/* Cross-Ticker Multi-Dashboard */}
                                                         <div style={{ marginBottom: '1rem' }}>
@@ -2419,6 +2765,69 @@
                         <div>&copy; 2026 Short-Alpha Pod | Quant Synthesis Matrix</div>
                         <div style={{ fontWeight: 800, color: 'var(--primary)' }}>DEMO MODE — NO API KEYS EXPOSED</div>
                     </footer>
+
+                    {/* PROVENANCE DRAWER */}
+                    <div className={`provenance-drawer ${provenanceItem ? 'open' : ''}`}>
+                        {provenanceItem && (
+                            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '10px', marginBottom: '15px' }}>
+                                    <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <Icons.Shield /> PROVENANCE RECORD
+                                    </h3>
+                                    <button onClick={() => setProvenanceItem(null)} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
+                                </div>
+
+                                <div style={{ flex: 1, overflowY: 'auto' }}>
+                                    <div style={{ marginBottom: 15 }}>
+                                        <div style={{ fontSize: '0.55rem', opacity: 0.5 }}>ID</div>
+                                        <div style={{ fontSize: '0.7rem', fontFamily: 'JetBrains Mono' }}>{provenanceItem.id}</div>
+                                    </div>
+                                    <div style={{ marginBottom: 15 }}>
+                                        <div style={{ fontSize: '0.55rem', opacity: 0.5 }}>SOURCE_TYPE | PROVIDER</div>
+                                        <div style={{ fontSize: '0.75rem', fontWeight: 800 }}>{provenanceItem.source_type.toUpperCase()} / {provenanceItem.provider}</div>
+                                    </div>
+                                    <div style={{ marginBottom: 15 }}>
+                                        <div style={{ fontSize: '0.55rem', opacity: 0.5 }}>TIMESTAMPS</div>
+                                        <div style={{ fontSize: '0.65rem' }}>PUB: {provenanceItem.published_at_utc}</div>
+                                        <div style={{ fontSize: '0.65rem' }}>RET: {provenanceItem.retrieved_at_utc}</div>
+                                    </div>
+                                    <div style={{ marginBottom: 15, background: 'rgba(255,255,255,0.05)', padding: 10, borderRadius: 8 }}>
+                                        <div style={{ fontSize: '0.55rem', opacity: 0.5, marginBottom: 4 }}>EXCERPT</div>
+                                        <div style={{ fontSize: '0.75rem', fontStyle: 'italic', lineHeight: 1.4 }}>"{provenanceItem.excerpt}"</div>
+                                    </div>
+                                    {provenanceItem.quality_flags && provenanceItem.quality_flags.length > 0 && (
+                                        <div style={{ marginBottom: 15 }}>
+                                            <div style={{ fontSize: '0.55rem', opacity: 0.5, marginBottom: 4 }}>QUALITY_FLAGS</div>
+                                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                                {provenanceItem.quality_flags.map(f => (
+                                                    <span key={f} style={{ fontSize: '0.55rem', background: 'rgba(239,68,68,0.2)', color: '#ef4444', padding: '2px 6px', borderRadius: 4, fontWeight: 800 }}>{f}</span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div style={{ marginBottom: 15 }}>
+                                        <div style={{ fontSize: '0.55rem', opacity: 0.5, marginBottom: 4 }}>METRICS</div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, fontSize: '0.7rem' }}>
+                                            {Object.entries(provenanceItem.metrics || {}).map(([k, v]) => (
+                                                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--surface)', padding: '4px 8px', borderRadius: 4 }}>
+                                                    <span style={{ opacity: 0.7 }}>{k.toUpperCase()}</span>
+                                                    <span style={{ fontWeight: 800 }}>{v}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    {provenanceItem.url && provenanceItem.url !== '#' && (
+                                        <div style={{ marginTop: 20 }}>
+                                            <a href={provenanceItem.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', textAlign: 'center', background: 'var(--primary)', color: 'black', textDecoration: 'none', padding: '10px', borderRadius: 8, fontWeight: 800, fontSize: '0.75rem' }}>
+                                                VIEW ORIGINAL SOURCE
+                                            </a>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                 </div >
             );
         };
