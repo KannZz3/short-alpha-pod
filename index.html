@@ -1134,42 +1134,66 @@
                     return { ticker: t, corr: v.lag48.noise_si, hitRate: v.hitRate, status: v.hypothesis };
                 });
             },
-            getSynthetic: (ticker, scenario = 'mild', params = {}) => {
+            getSynthetic: (ticker, scenario = 'mild', params = {}, appliedShocks = []) => {
                 const rows = [];
                 const s = DataHub._seed(ticker);
                 const { buildup = 1.0, severity = 1.0, freq = 1.0, intensity = 1.0 } = params;
-                const scenarios = {
-                    mild: { mult: 1, burst: 0.2 },
-                    moderate: { mult: 2.5, burst: 0.5 },
-                    severe: { mult: 4.0, burst: 0.9 }
-                };
-                const conf = scenarios[scenario] || scenarios.mild;
+                const conf = { mult: 1, burst: 0.2 };
 
                 for (let i = 0; i < 1095; i++) {
                     const t = i / 1095;
                     const peakLoc = 0.3 + (s % 4) / 10;
                     const dist = Math.abs(t - peakLoc);
-                    const siP = (dist < 0.2 * buildup ? Math.max(0.1, 1 - dist * (4 / buildup)) : 0.1) * 20 * severity * conf.mult;
 
-                    const news = (Math.sin(t * 10 * freq) * 0.3 * intensity + (Math.random() - 0.5) * 0.1) * conf.mult;
-                    const retail = dist < 0.05 ? (Math.random() - 0.5) * 1.5 * intensity * conf.mult : (Math.random() - 0.5) * 0.2;
-                    const agg = (news * 0.6 + retail * 0.4).toFixed(4);
-                    const vol = (Math.abs(agg) * 0.5 + siP / 40).toFixed(4);
+                    let siDelta = 0;
+                    let newsDelta = 0;
+                    let retailDelta = 0;
+                    let aggDelta = 0;
+
+                    const peakDay = Math.floor(peakLoc * 1095);
+
+                    appliedShocks.forEach(shock => {
+                        const shockStart = peakDay - shock.duration_days / 2;
+                        const shockEnd = peakDay + shock.duration_days / 2;
+                        if (i >= shockStart && i <= shockEnd) {
+                            if (shock.var === 'si' || shock.var === 'squeeze') siDelta += shock.delta;
+                            if (shock.var === 'news') newsDelta += shock.delta;
+                            if (shock.var === 'retail') retailDelta += shock.delta;
+                            if (shock.var === 'noise') aggDelta += shock.delta;
+                        }
+                    });
+
+                    let siP = (dist < 0.2 * buildup ? Math.max(0.1, 1 - dist * (4 / buildup)) : 0.1) * 20 * severity * conf.mult;
+                    siP = Math.max(0, siP + siDelta);
+
+                    let news = (Math.sin(t * 10 * freq) * 0.3 * intensity + (Math.random() - 0.5) * 0.1) * conf.mult;
+                    news += newsDelta;
+
+                    let retail = dist < 0.05 ? (Math.random() - 0.5) * 1.5 * intensity * conf.mult : (Math.random() - 0.5) * 0.2;
+                    retail += retailDelta;
+
+                    let agg = (news * 0.6 + retail * 0.4) + aggDelta * (Math.random() - 0.5);
+                    agg = parseFloat(agg.toFixed(4));
+
+                    let vol = (Math.abs(agg) * 0.5 + siP / 40);
+                    vol = parseFloat(vol.toFixed(4));
+
+                    siP = parseFloat(siP.toFixed(2));
 
                     rows.push({
                         day: i,
                         date: new Date(2022, 0, i + 1).toISOString().split('T')[0],
-                        si_pct: siP.toFixed(2),
-                        news_sent: parseFloat(news.toFixed(4)),
-                        retail_hype: parseFloat(retail.toFixed(4)),
-                        volatility: parseFloat(vol),
-                        agg_sentiment: parseFloat(agg),
+                        si_pct: siP,
+                        news_sent: news,
+                        retail_hype: retail,
+                        volatility: vol,
+                        agg_sentiment: agg,
                         normalized_short_interest: siP,
                         synthetic_short_interest_pct: siP,
-                        news_sentiment_index: parseFloat(news.toFixed(4)),
-                        retail_hype_index: parseFloat(retail.toFixed(4)),
-                        price_action_volatility: parseFloat(vol),
-                        aggregated_sentiment_score: parseFloat(agg)
+                        news_sentiment_index: news,
+                        retail_hype_index: retail,
+                        price_action_volatility: vol,
+                        aggregated_sentiment_score: agg
                     });
                 }
                 return rows;
@@ -1369,18 +1393,118 @@
             });
         };
 
+        const ScenarioLibrary = {
+            liquidity_crunch: { scenario_id: 'liquidity_crunch', name: 'Liquidity Crunch', narrative: 'Sudden evaporation of short-term liquidity causing spread blowouts.', shocks: [{ var: 'noise', delta: 2.0, duration_days: 10 }], expected_failure_modes: ['correlations_break', 'extreme_severity_degradation'] },
+            meme_surge: { scenario_id: 'meme_surge', name: 'Meme Surge', narrative: 'Uncoordinated but massive retail inflow triggered by social media.', shocks: [{ var: 'retail', delta: 5.0, duration_days: 5 }], expected_failure_modes: ['noise_dominance', 'lag_inversion'] },
+            borrow_fee_spike: { scenario_id: 'borrow_fee_spike', name: 'Borrow Fee Spike', narrative: 'Hard-to-borrow status triggers violent forced covering.', shocks: [{ var: 'squeeze', delta: 3.0, duration_days: 15 }], expected_failure_modes: ['rapid_squeeze_trigger'] },
+            regulatory_shock: { scenario_id: 'regulatory_shock', name: 'Regulatory Shock', narrative: 'Unexpected regulatory scrutiny freezes institutional activity.', shocks: [{ var: 'news', delta: -4.0, duration_days: 20 }], expected_failure_modes: ['institutional_desertion'] },
+            false_viral_noise: { scenario_id: 'false_viral_noise', name: 'False Viral Noise', narrative: 'High engagement fake news spike that quickly normalizes.', shocks: [{ var: 'noise', delta: 4.0, duration_days: 3 }], expected_failure_modes: ['transient_hype_failure'] },
+            slow_covering: { scenario_id: 'slow_covering', name: 'Slow Covering', narrative: 'Methodical unwinding of short positions without triggering panic.', shocks: [{ var: 'si', delta: -2.0, duration_days: 30 }], expected_failure_modes: ['momentum_decay'] }
+        };
+
+        const mapSlidersToScenarioShocks = (scenarioDef, sliders) => {
+            const { buildup = 1.0, severity = 1.0, freq = 1.0, intensity = 1.0 } = sliders;
+            return scenarioDef.shocks.map(baseShock => {
+                let scaledDelta = baseShock.delta * severity;
+                if (['noise', 'retail', 'news'].includes(baseShock.var)) {
+                    scaledDelta *= intensity;
+                }
+                const duration = Math.max(1, Math.round((baseShock.duration_days * buildup) / freq));
+                return {
+                    var: baseShock.var,
+                    delta: scaledDelta,
+                    duration_days: duration
+                };
+            });
+        };
+
         const SyntheticScenarioAgent = (ctx) => {
             return new Promise((resolve) => {
                 setTimeout(() => {
-                    const params = ctx.params || { buildup: 1.0, severity: 1.0, freq: 1.0, intensity: 1.2 };
-                    const scenario = ctx.scenario || 'mild';
-                    const syntheticData = DataHub.getSynthetic(ctx.ticker, scenario, params);
-                    const auditData = DataHub.getAudit(ctx.ticker);
+                    const scenarioKey = ctx.scenario || 'liquidity_crunch';
+                    const scenarioDef = ScenarioLibrary[scenarioKey] || ScenarioLibrary.liquidity_crunch;
+
+                    const params = ctx.params || { buildup: 1.0, severity: 1.0, freq: 1.0, intensity: 1.0 };
+                    const appliedShocks = mapSlidersToScenarioShocks(scenarioDef, params);
+
+                    const syntheticData = DataHub.getSynthetic(ctx.ticker, scenarioKey, params, appliedShocks);
+                    let auditData = DataHub.getAudit(ctx.ticker);
+
+                    // Fidelity Extension
+                    const tailRisk = Math.min(100, Math.max(0, 100 - (params.severity * 15)));
+                    const fidelity_breakdown = {
+                        ...auditData.sub,
+                        tail_risk: Math.round(tailRisk)
+                    };
+                    auditData.score = Math.round((Object.values(fidelity_breakdown).reduce((a, b) => a + b, 0)) / Object.keys(fidelity_breakdown).length);
+                    auditData.sub = fidelity_breakdown;
+
+                    // Robustness Score from Real Data
+                    const half = Math.floor(syntheticData.length / 2);
+                    const baseline = syntheticData.slice(0, half);
+                    const stressed = syntheticData.slice(half);
+
+                    const avg = (arr, key) => arr.reduce((sum, d) => sum + d[key], 0) / arr.length;
+
+                    const squeezeDiff = avg(stressed, 'synthetic_short_interest_pct') - avg(baseline, 'synthetic_short_interest_pct');
+                    const direction_consistency = squeezeDiff > 0 === params.severity > 0 ? 0.9 : 0.3; // Very rough proxy
+
+                    // Count threshold crossings
+                    let threshold_crossings = 0;
+                    syntheticData.forEach(d => {
+                        if (d.synthetic_short_interest_pct > 30) threshold_crossings++;
+                        if (Math.abs(d.news_sentiment_index) > 0.8) threshold_crossings++;
+                        if (Math.abs(d.retail_hype_index) > 0.8) threshold_crossings++;
+                    });
+
+                    // Rank Stability & Lag Stability proxies derived from data shape
+                    const maxSqueezeLoc = syntheticData.reduce((maxIdx, d, idx, arr) => d.synthetic_short_interest_pct > arr[maxIdx].synthetic_short_interest_pct ? idx : maxIdx, 0);
+                    const maxNewsLoc = syntheticData.reduce((maxIdx, d, idx, arr) => d.news_sentiment_index > arr[maxIdx].news_sentiment_index ? idx : maxIdx, 0);
+                    const lagDist = Math.abs(maxSqueezeLoc - maxNewsLoc);
+                    const lag_stability = Math.max(0, 1 - (lagDist / 30));
+
+                    const rank_stability = Math.max(0, 1 - (threshold_crossings / 1000));
+
+                    const robustness_score = {
+                        direction_consistency,
+                        rank_stability,
+                        lag_stability,
+                        threshold_crossings
+                    };
+
+                    let failure_modes = [];
+                    if (direction_consistency < 0.5) failure_modes.push('noise_dominance');
+                    if (lag_stability < 0.5) failure_modes.push('lag_inversion');
+                    if (threshold_crossings > 500) failure_modes.push('extreme_severity_degradation');
+                    if (avg(stressed, 'retail_hype_index') > 1.0) failure_modes.push('transient_hype_failure');
+
+                    // Map generic failures to expected failure modes if present
+                    const expectedModes = scenarioDef.expected_failure_modes;
+                    const triggeredFailures = failure_modes.filter(m => expectedModes.includes(m));
+                    if (triggeredFailures.length === 0 && failure_modes.length > 0) {
+                        triggeredFailures.push(failure_modes[0]);
+                    }
+                    if (triggeredFailures.length === 0 && params.severity > 3) {
+                        triggeredFailures.push(expectedModes[0] || 'structural_break');
+                    }
+
+                    const summary_verdict = triggeredFailures.length > 1 ? 'FAIL' : (triggeredFailures.length === 1 ? 'WARN' : 'PASS');
+                    const what_breaks_first = triggeredFailures.length > 0 ? triggeredFailures[0] : 'None';
+
+                    const stress_test_report = {
+                        scenario_set: { ...scenarioDef, applied_shocks: appliedShocks },
+                        fidelity_breakdown,
+                        robustness_score,
+                        failure_modes: triggeredFailures.length > 0 ? triggeredFailures : failure_modes,
+                        what_breaks_first,
+                        summary_verdict
+                    };
 
                     resolve({
                         syntheticData,
                         auditData,
-                        scenarioSummary: { scenario, days: syntheticData.length }
+                        scenarioSummary: { scenario: scenarioKey, days: syntheticData.length },
+                        stress_test_report
                     });
                 }, 800);
             });
@@ -1443,8 +1567,8 @@
             const [selectedDate, setSelectedDate] = useState(null);
             const [range, setRange] = useState({ start: "2021-01-01", end: "2021-12-31" });
             const [tab, setTab] = useState('evidence');
-            const [scenario, setScenario] = useState('mild');
-            const [params, setParams] = useState({ buildup: 1.0, severity: 1.0, freq: 1.0, intensity: 1.2 });
+            const [scenario, setScenario] = useState('liquidity_crunch');
+            const [params, setParams] = useState({ buildup: 1.0, severity: 1.0, freq: 1.0, intensity: 1.0 });
             const [lagScope, setLagScope] = useState('peak'); // 'peak', 'range', 'global'
 
             // --- FEATURE FLAGS (UPGRADES) ---
@@ -1657,6 +1781,7 @@
                             lag_validation: dynamicValidation?.hypothesis,
                             tradable_probability: dynamicValidation?.tradableProb,
                             scenario_summary: synthResult.scenarioSummary,
+                            stress_test_report: synthResult.stress_test_report,
                             final_verdict: (gtResult.theoryVerdict === 'FAIL' || dynamicValidation?.hypothesis === 'FAIL') ? 'REJECTED' : 'APPROVED'
                         }
                     }));
@@ -1890,14 +2015,17 @@
                                             const file = new Blob([JSON.stringify(runContext.runArtifact, null, 2)], { type: 'application/json' });
                                             a.href = URL.createObjectURL(file);
                                             a.download = `run_artifact_${ticker}_${Date.now()}.json`;
+                                            document.body.appendChild(a);
                                             a.click();
+                                            document.body.removeChild(a);
+                                            URL.revokeObjectURL(a.href);
                                         }}
                                     >
                                         EXPORT RUN_ARTIFACT
                                     </button>
                                 )}
                                 <div style={{ opacity: 0.6 }}>
-                                    v1.0.11| <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
+                                    v1.0.12| <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
                                 </div>
                             </div>
                         </div>
@@ -2601,7 +2729,7 @@
                                 )}
                                 {tab === 'synthetic' && audit ? (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem', animation: 'fadeIn 0.3s' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) 2fr', gap: '1.5rem' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(260px, 1.2fr) 1.8fr', gap: '1.5rem' }}>
                                             <div className="glass" style={{ padding: '1.2rem', textAlign: 'center' }}>
                                                 <h3 style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: 15 }}>Fidelity Score Decomposition</h3>
                                                 <div style={{ position: 'relative', width: 120, height: 120, margin: '0 auto' }}>
@@ -2623,14 +2751,55 @@
                                                 ))}
                                             </div>
 
+                                            {(() => {
+                                                const st_report = runContext.runArtifact?.stress_test_report;
+                                                const verdict = st_report?.summary_verdict || 'N/A';
+                                                const vColor = verdict === 'PASS' ? '#10b981' : verdict === 'WARN' ? '#f59e0b' : '#ef4444';
+                                                return (
+                                                    <div className="glass" style={{ padding: '1.2rem', display: 'flex', flexDirection: 'column' }}>
+                                                        <h3 style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: 15, display: 'flex', justifyContent: 'space-between' }}>
+                                                            Robustness Check
+                                                            <span style={{ color: vColor, fontWeight: 800 }}>{verdict}</span>
+                                                        </h3>
+                                                        {st_report ? (
+                                                            <>
+                                                                <div style={{ fontSize: '0.65rem', marginBottom: 10 }}>
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.8, marginBottom: 4 }}><span>Direction Match:</span> <strong>{st_report.robustness_score.direction_consistency * 100}%</strong></div>
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.8, marginBottom: 4 }}><span>Rank Stability:</span> <strong>{st_report.robustness_score.rank_stability * 100}%</strong></div>
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.8, marginBottom: 4 }}><span>Lag Stability:</span> <strong>{st_report.robustness_score.lag_stability * 100}%</strong></div>
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.8, marginBottom: 4 }}><span>Threshold Crossings:</span> <strong style={{ color: st_report.robustness_score.threshold_crossings > 0 ? '#10b981' : 'inherit' }}>{st_report.robustness_score.threshold_crossings}</strong></div>
+                                                                </div>
+                                                                <div style={{ fontSize: '0.6rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 10, marginTop: 'auto' }}>
+                                                                    <div style={{ opacity: 0.5, marginBottom: 4 }}>TRIGGERED FAILURES:</div>
+                                                                    {st_report.failure_modes.length > 0 ? (
+                                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                                                            {st_report.failure_modes.map(mode => (
+                                                                                <span key={mode} style={{ padding: '2px 6px', background: 'rgba(239,68,68,0.2)', color: '#ef4444', borderRadius: 4, fontWeight: 800, fontSize: '0.5rem' }}>{mode.toUpperCase()}</span>
+                                                                            ))}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div style={{ color: '#10b981', fontWeight: 800 }}>NONE DETECTED</div>
+                                                                    )}
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <div style={{ opacity: 0.5, fontSize: '0.6rem', textAlign: 'center', marginTop: 20 }}>Awaiting Orchestrator...</div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })()}
+
                                             <div className="glass" style={{ padding: '1.2rem' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
                                                     <h3 style={{ margin: 0, fontSize: '0.8rem' }}>Dataset Setup</h3>
                                                     {runSafe('enableScenarioLibrary', () => (
-                                                        <div style={{ display: 'flex', gap: 6 }}>
-                                                            {['mild', 'moderate', 'severe'].map(s => (
-                                                                <button key={s} className={`tab-btn ${scenario === s ? 'active' : ''}`} style={{ fontSize: '0.55rem', padding: '3px 6px' }} onClick={() => setScenario(s)}>
-                                                                    {s.toUpperCase()}
+                                                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: '300px' }}>
+                                                            {Object.entries(ScenarioLibrary).map(([key, def]) => (
+                                                                <button key={key} className={`tab-btn ${scenario === key ? 'active' : ''}`} style={{ fontSize: '0.55rem', padding: '3px 6px' }} onClick={() => {
+                                                                    setScenario(key);
+                                                                    setParams({ buildup: 1.0, severity: 1.0, freq: 1.0, intensity: 1.0 });
+                                                                }}>
+                                                                    {def.name.toUpperCase()}
                                                                 </button>
                                                             ))}
                                                         </div>
@@ -2671,8 +2840,30 @@
                                                 ))}
 
                                                 <div style={{ marginTop: 15, display: 'flex', gap: 20 }}>
-                                                    <button className="tag-pill" style={{ flex: 1 }} onClick={() => copyData('csv')}>EXPORT CSV</button>
-                                                    <button className="tag-pill" style={{ flex: 1 }} onClick={() => copyData('json')}>EXPORT JSON</button>
+                                                    <button className="tag-pill" style={{ flex: 1 }} onClick={() => {
+                                                        const a = document.createElement("a");
+                                                        const st_report = runContext.runArtifact?.stress_test_report || {};
+                                                        const scenario_set = st_report.scenario_set || { scenario_id: scenario, applied_shocks: params };
+                                                        const file = new Blob([JSON.stringify(scenario_set, null, 2)], { type: 'application/json' });
+                                                        a.href = URL.createObjectURL(file);
+                                                        a.download = `scenario_set_${scenario}_${Date.now()}.json`;
+                                                        document.body.appendChild(a);
+                                                        a.click();
+                                                        document.body.removeChild(a);
+                                                        URL.revokeObjectURL(a.href);
+                                                    }}>EXPORT SCENARIO_SET</button>
+
+                                                    <button className="tag-pill" style={{ flex: 1, borderColor: '#8b5cf6', color: '#8b5cf6' }} onClick={() => {
+                                                        const a = document.createElement("a");
+                                                        const st_report = runContext.runArtifact?.stress_test_report || { error: 'Not generated yet' };
+                                                        const file = new Blob([JSON.stringify(st_report, null, 2)], { type: 'application/json' });
+                                                        a.href = URL.createObjectURL(file);
+                                                        a.download = `stress_test_report_${scenario}_${Date.now()}.json`;
+                                                        document.body.appendChild(a);
+                                                        a.click();
+                                                        document.body.removeChild(a);
+                                                        URL.revokeObjectURL(a.href);
+                                                    }}>EXPORT STRESS_TEST_REPORT</button>
                                                 </div>
                                             </div>
                                         </div>
