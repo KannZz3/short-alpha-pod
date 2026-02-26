@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Short-Alpha Pod | Synthesis Matrix</title>
     <!-- Critical Libraries -->
     <script>
@@ -49,6 +49,7 @@
             --text: #f9fafb;
             --text-muted: #9ca3af;
             --border: #374151;
+            --sidebar-w: 320px;
         }
 
         * {
@@ -60,8 +61,13 @@
             background: var(--bg);
             color: var(--text);
             font-family: 'Inter', sans-serif;
-            overflow: hidden;
+            overflow-x: hidden;
+            overflow-y: auto;
             letter-spacing: -0.01em;
+            /* iOS Safe Areas */
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
+            padding-bottom: env(safe-area-inset-bottom);
         }
 
         /* --- DIAGNOSTICS OVERLAY (POPOVER) --- */
@@ -241,8 +247,82 @@
 
         .main-container {
             display: grid;
-            grid-template-columns: 320px 1fr;
-            height: calc(100vh - 66px);
+            grid-template-columns: var(--sidebar-w) 2px 1fr;
+            min-height: calc(100vh - 66px);
+            position: relative;
+        }
+
+        .pane-resizer {
+            width: 2px;
+            height: 100%;
+            background: var(--border);
+            cursor: col-resize;
+            transition: background 0.2s, box-shadow 0.2s;
+            z-index: 10;
+            position: relative;
+        }
+
+        .pane-resizer::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: -4px;
+            right: -4px;
+            bottom: 0;
+            z-index: 1;
+        }
+
+        .pane-resizer:hover,
+        .pane-resizer.is-dragging {
+            background: var(--primary);
+            box-shadow: 0 0 8px var(--primary-muted);
+        }
+
+        .is-dragging-page {
+            cursor: col-resize !important;
+            user-select: none !important;
+        }
+
+        /* Responsive Breakpoint: 1024px */
+        @media (max-width: 1023px) {
+            header {
+                flex-wrap: wrap;
+                height: auto !important;
+                padding: 1rem !important;
+                gap: 1rem;
+            }
+
+            .main-container {
+                grid-template-columns: 1fr;
+                height: auto;
+            }
+
+            aside {
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+                width: 100% !important;
+                max-height: none !important;
+                overflow-y: visible !important;
+            }
+
+            main {
+                width: 100% !important;
+                overflow-y: visible !important;
+            }
+
+            .stat-grid {
+                grid-template-columns: 1fr !important;
+            }
+
+            .chart-box {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .chart-box svg {
+                min-width: 600px;
+                /* Ensure chart remains readable */
+            }
         }
 
         aside {
@@ -252,7 +332,33 @@
             flex-direction: column;
             gap: 1.5rem;
             background: rgba(17, 24, 39, 0.3);
+            overflow-x: auto;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            cursor: grab;
+            position: relative;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+        }
+
+        aside:active {
+            cursor: grabbing;
+        }
+
+        /* Gradient fade for horizontal overflow */
+        aside::after {
+            content: "";
+            position: sticky;
+            top: 0;
+            right: 0;
+            height: 100%;
+            width: 20px;
+            background: linear-gradient(to right, transparent, var(--bg));
+            pointer-events: none;
+            z-index: 5;
+            flex-shrink: 0;
+            margin-right: -1.5rem;
+            /* Offset padding */
         }
 
         main {
@@ -1007,6 +1113,95 @@
             const [buildError, setBuildError] = useState(null);
             const [loading, setLoading] = useState(true);
 
+            // --- RESIZABLE SIDEBAR LOGIC ---
+            const [sidebarWidth, setSidebarWidth] = useState(() => {
+                const saved = localStorage.getItem('__pod_sidebar_w');
+                return saved ? parseInt(saved) : 320;
+            });
+            const [isDragging, setIsDragging] = useState(false);
+
+            const startResizing = (e) => {
+                e.preventDefault();
+                setIsDragging(true);
+                document.body.classList.add('is-dragging-page');
+            };
+
+            const stopResizing = () => {
+                setIsDragging(false);
+                document.body.classList.remove('is-dragging-page');
+                localStorage.setItem('__pod_sidebar_w', sidebarWidth);
+            };
+
+            const resize = (e) => {
+                if (!isDragging) return;
+                // Use requestAnimationFrame for smooth 60fps dragging
+                requestAnimationFrame(() => {
+                    const newWidth = Math.min(Math.max(e.clientX, 260), 520);
+                    setSidebarWidth(newWidth);
+                });
+            };
+
+            const resetSidebar = () => {
+                setSidebarWidth(320);
+                localStorage.setItem('__pod_sidebar_w', 320);
+            };
+
+            useEffect(() => {
+                if (isDragging) {
+                    window.addEventListener('pointermove', resize);
+                    window.addEventListener('pointerup', stopResizing);
+                    return () => {
+                        window.removeEventListener('pointermove', resize);
+                        window.removeEventListener('pointerup', stopResizing);
+                    };
+                }
+            }, [isDragging, sidebarWidth]);
+
+            // --- SIDEBAR PAN LOGIC ---
+            const asideRef = useRef(null);
+            const [isPanning, setIsPanning] = useState(false);
+            const [panStart, setPanStart] = useState({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+
+            const startPanning = (e) => {
+                // Only left click or primary touch
+                if (e.button !== 0) return;
+                const el = asideRef.current;
+                if (!el) return;
+
+                // Check for horizontal overflow before allowing pan
+                if (el.scrollWidth <= el.clientWidth) return;
+
+                setIsPanning(true);
+                setPanStart({
+                    x: e.clientX,
+                    y: e.clientY,
+                    scrollLeft: el.scrollLeft,
+                    scrollTop: el.scrollTop
+                });
+                el.setPointerCapture(e.pointerId);
+            };
+
+            const doPan = (e) => {
+                if (!isPanning || !asideRef.current) return;
+
+                const dx = e.clientX - panStart.x;
+                const dy = e.clientY - panStart.y;
+
+                // 6px threshold to distinguish between click and drag
+                if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+                    asideRef.current.scrollLeft = panStart.scrollLeft - dx;
+                    // Vertical pan is also supported if sidebar is tall
+                    asideRef.current.scrollTop = panStart.scrollTop - dy;
+                }
+            };
+
+            const stopPanning = (e) => {
+                setIsPanning(false);
+                if (asideRef.current) {
+                    asideRef.current.releasePointerCapture(e.pointerId);
+                }
+            };
+
             const filteredData = useMemo(() => merged.filter(d => d.d >= range.start && d.d <= range.end), [merged, range]);
             const filterDate = hoverIdx !== null ? filteredData[hoverIdx]?.d : (selectedDate || activePeak.date);
 
@@ -1245,7 +1440,7 @@
                             </div>
                         </div>
                         <div style={{ opacity: 0.6 }}>
-                            v1.0.4-stable | <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
+                            v1.0.5-mobile | <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
                         </div>
                     </div>
 
@@ -1323,8 +1518,14 @@
                         </div>
                     </header>
 
-                    <div className="main-container">
-                        <aside>
+                    <div className="main-container" style={{ '--sidebar-w': `${sidebarWidth}px` }}>
+                        <aside
+                            ref={asideRef}
+                            onPointerDown={startPanning}
+                            onPointerMove={doPan}
+                            onPointerUp={stopPanning}
+                            onPointerCancel={stopPanning}
+                        >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
                                 <h2 style={{ margin: 0 }}>Squeeze Navigator</h2>
                                 <select className="ticker-select" style={{ fontSize: '0.55rem', padding: '2px 4px' }} value={rankMode} onChange={(e) => setRankMode(e.target.value)}>
@@ -1395,8 +1596,15 @@
                             </div>
                         </aside>
 
+                        <div
+                            className={`pane-resizer ${isDragging ? 'is-dragging' : ''}`}
+                            onPointerDown={startResizing}
+                            onDoubleClick={resetSidebar}
+                            title="Drag to resize / Double-click to reset"
+                        />
+
                         <main>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.5rem' }}>
+                            <div className="stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.5rem' }}>
                                 <div className="stat-card">
                                     <span className="stat-label">Squeeze Score</span>
                                     <span className="stat-value" style={{ color: '#10b981' }}>{current.squeeze}</span>
