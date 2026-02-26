@@ -1,0 +1,158 @@
+{
+    "schema_version": "1.0",
+    "description": "Short-Alpha Pod Regime Pack catalog. Maps scenario keys to their Block4-C stress-test definitions. Used by the UI Synthetic Stress Test tab for automatic regime selection based on ticker sector.",
+    "regimes": [
+        {
+            "scenario_id": "liquidity_crunch",
+            "name": "Liquidity Crunch",
+            "sector_tags": [
+                "fintech",
+                "payments",
+                "crypto"
+            ],
+            "risk_level": "HIGH",
+            "narrative": "Sudden evaporation of short-term liquidity causing spread blowouts and forced covering.",
+            "shocks": [
+                {
+                    "var": "noise",
+                    "delta": 2.0,
+                    "duration_days": 10
+                }
+            ],
+            "expected_failure_modes": [
+                "correlations_break",
+                "extreme_severity_degradation"
+            ],
+            "typical_drawdown_pct": -18,
+            "mean_reversion_days": 12
+        },
+        {
+            "scenario_id": "meme_surge",
+            "name": "Meme Surge",
+            "sector_tags": [
+                "ev",
+                "retail_sentiment",
+                "social_momentum"
+            ],
+            "risk_level": "EXTREME",
+            "narrative": "Uncoordinated but massive retail inflow triggered by social media virality.",
+            "shocks": [
+                {
+                    "var": "retail",
+                    "delta": 5.0,
+                    "duration_days": 5
+                }
+            ],
+            "expected_failure_modes": [
+                "noise_dominance",
+                "lag_inversion"
+            ],
+            "typical_drawdown_pct": -35,
+            "mean_reversion_days": 5
+        },
+        {
+            "scenario_id": "borrow_fee_spike",
+            "name": "Borrow Fee Spike",
+            "sector_tags": [
+                "fintech",
+                "payments",
+                "ecommerce"
+            ],
+            "risk_level": "HIGH",
+            "narrative": "Hard-to-borrow status triggers violent forced covering as cost-to-borrow spikes.",
+            "shocks": [
+                {
+                    "var": "squeeze",
+                    "delta": 3.0,
+                    "duration_days": 15
+                }
+            ],
+            "expected_failure_modes": [
+                "rapid_squeeze_trigger"
+            ],
+            "typical_drawdown_pct": -22,
+            "mean_reversion_days": 20
+        },
+        {
+            "scenario_id": "regulatory_shock",
+            "name": "Regulatory Shock",
+            "sector_tags": [
+                "fintech",
+                "payments",
+                "crypto",
+                "ecommerce"
+            ],
+            "risk_level": "MEDIUM",
+            "narrative": "Unexpected regulatory scrutiny freezes institutional activity and collapses sentiment.",
+            "shocks": [
+                {
+                    "var": "news",
+                    "delta": -4.0,
+                    "duration_days": 20
+                }
+            ],
+            "expected_failure_modes": [
+                "institutional_desertion"
+            ],
+            "typical_drawdown_pct": -12,
+            "mean_reversion_days": 30
+        },
+        {
+            "scenario_id": "false_viral_noise",
+            "name": "False Viral Noise",
+            "sector_tags": [
+                "ev",
+                "retail_sentiment"
+            ],
+            "risk_level": "LOW",
+            "narrative": "High-engagement fake news spike that quickly normalizes.",
+            "shocks": [
+                {
+                    "var": "noise",
+                    "delta": 4.0,
+                    "duration_days": 3
+                }
+            ],
+            "expected_failure_modes": [
+                "transient_hype_failure"
+            ],
+            "typical_drawdown_pct": -5,
+            "mean_reversion_days": 3
+        },
+        {
+            "scenario_id": "slow_covering",
+            "name": "Slow Covering",
+            "sector_tags": [
+                "ecommerce",
+                "payments"
+            ],
+            "risk_level": "LOW",
+            "narrative": "Methodical unwinding of short positions without triggering panic.",
+            "shocks": [
+                {
+                    "var": "si",
+                    "delta": -2.0,
+                    "duration_days": 30
+                }
+            ],
+            "expected_failure_modes": [
+                "momentum_decay"
+            ],
+            "typical_drawdown_pct": -8,
+            "mean_reversion_days": 45
+        }
+    ],
+    "ticker_sector_map": {
+        "AFRM": "fintech",
+        "SQ": "fintech",
+        "PYPL": "payments",
+        "SHOP": "ecommerce",
+        "TSLA": "ev"
+    },
+    "sector_default_scenario": {
+        "fintech": "liquidity_crunch",
+        "payments": "regulatory_shock",
+        "ecommerce": "slow_covering",
+        "ev": "meme_surge"
+    }
+}

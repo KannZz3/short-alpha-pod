@@ -936,6 +936,10 @@
             _store: [],
             _newsCache: [],
             _retailCache: [],
+            _regimeCatalog: null,
+            _dailySnapshot: null,
+            _liveNewsLoaded: false,
+            _liveRetailLoaded: false,
             _isReady: false,
             init: async () => {
                 if (DataHub._isReady) return;
@@ -966,11 +970,23 @@
                         DataHub._store = store;
                     }
 
-                    if (newsLiveRes && newsLiveRes.ok) { DataHub._newsCache = await newsLiveRes.json(); }
+                    if (newsLiveRes && newsLiveRes.ok) { DataHub._newsCache = await newsLiveRes.json(); DataHub._liveNewsLoaded = true; }
                     else if (newsRes && newsRes.ok) { DataHub._newsCache = await newsRes.json(); }
 
-                    if (retailLiveRes && retailLiveRes.ok) { DataHub._retailCache = await retailLiveRes.json(); }
+                    if (retailLiveRes && retailLiveRes.ok) { DataHub._retailCache = await retailLiveRes.json(); DataHub._liveRetailLoaded = true; }
                     else if (retailRes && retailRes.ok) { DataHub._retailCache = await retailRes.json(); }
+
+                    // Block4-A: Load regime catalog (graceful fail)
+                    try {
+                        const regimeRes = await fetch(BASE + "data/regime_catalog.json");
+                        if (regimeRes.ok) DataHub._regimeCatalog = await regimeRes.json();
+                    } catch (e) { /* regime_catalog optional */ }
+
+                    // Block4-A: Load daily snapshot if SQUEEZE_ORACLE_MODE (graceful fail)
+                    try {
+                        const snapRes = await fetch(BASE + "data/daily_snapshot.json");
+                        if (snapRes.ok) DataHub._dailySnapshot = await snapRes.json();
+                    } catch (e) { /* daily_snapshot optional */ }
 
                     DataHub._isReady = true;
                 } catch (e) {
@@ -1035,31 +1051,100 @@
                 const news = DataHub._newsCache.filter(n => n.ticker === ticker);
                 const retail = DataHub._retailCache.filter(r => r.ticker === ticker);
 
-                const newsCount = {};
-                const retailCount = {};
+                // Per-day buckets: count, weighted sentiment, engagement
+                const newsCount = {}, newsSentSum = {}, newsSentN = {};
+                const retailEngSum = {}, retailHypeSum = {}, retailN = {};
+
+                // Swan tag set — evidence-driven, deterministic
+                const SWAN_TAGS = new Set(['regulatory', 'fraud', 'liquidity', 'lawsuit', 'halt', 'bankruptcy', 'sec', 'downgrade']);
+                const swanDays = new Set();
 
                 news.forEach(n => {
-                    const d = n.published_at_utc.split('T')[0];
+                    const d = (n.published_at_utc || '').split('T')[0];
+                    if (!d) return;
                     newsCount[d] = (newsCount[d] || 0) + 1;
+                    const s = n.metrics?.sentiment || 0;
+                    newsSentSum[d] = (newsSentSum[d] || 0) + s;
+                    newsSentN[d] = (newsSentN[d] || 0) + 1;
+                    // Swan detection from tags
+                    const tags = (n.tags || []).map(t => String(t).toLowerCase());
+                    const shock = Math.abs(n.metrics?.shock || 0);
+                    if (tags.some(t => SWAN_TAGS.has(t)) || shock > 5) swanDays.add(d);
                 });
                 retail.forEach(r => {
-                    const d = r.published_at_utc.split('T')[0];
-                    retailCount[d] = (retailCount[d] || 0) + (r.metrics?.engagement || 1);
+                    const d = (r.published_at_utc || '').split('T')[0];
+                    if (!d) return;
+                    const eng = r.metrics?.engagement || 1;
+                    const hype = Math.abs(r.metrics?.sentiment || 0);
+                    retailEngSum[d] = (retailEngSum[d] || 0) + eng;
+                    retailHypeSum[d] = (retailHypeSum[d] || 0) + hype;
+                    retailN[d] = (retailN[d] || 0) + 1;
+                    const tags = (r.tags || []).map(t => String(t).toLowerCase());
+                    if (tags.some(t => SWAN_TAGS.has(t)) || hype > 0.9) swanDays.add(d);
                 });
 
-                const maxN = Math.max(...Object.values(newsCount), 1);
-                const maxR = Math.max(...Object.values(retailCount), 1);
+                // Raw counts for normalization
+                const allNC = Object.values(newsCount);
+                const allRE = Object.values(retailEngSum);
+                const maxN = Math.max(...allNC, 1);
+                const maxR = Math.max(...allRE, 1);
 
-                return data.map(row => {
-                    const nVol = (newsCount[row.d] || 0) / maxN;
-                    const rVol = (retailCount[row.d] || 0) / maxR;
+                // Build raw combined series for z-score
+                const rawCombined = data.map(row => {
+                    const nv = (newsCount[row.d] || 0) / maxN;        // 0..1 news count ratio
+                    const rv = (retailEngSum[row.d] || 0) / maxR;     // 0..1 retail engagement ratio
+                    return 0.6 * nv + 0.4 * rv;
+                });
+
+                // Z-score normalization -> rescale to 0..100
+                const combMean = rawCombined.reduce((a, b) => a + b, 0) / (rawCombined.length || 1);
+                const combVar = rawCombined.reduce((a, b) => a + (b - combMean) ** 2, 0) / (rawCombined.length || 1);
+                const combStd = Math.sqrt(combVar) || 1;
+
+                return data.map((row, idx) => {
+                    const nc = newsCount[row.d] || 0;               // raw news count
+                    const re = retailEngSum[row.d] || 0;            // raw retail engagement
+                    const nv = nc / maxN;                           // 0..1 news volume
+                    const rv = re / maxR;                           // 0..1 retail volume
+
+                    // Real sentiment avg (0 if no news)
+                    const nsCnt = newsSentN[row.d] || 0;
+                    const ns = nsCnt > 0 ? (newsSentSum[row.d] / nsCnt) : 0;  // -1..1 news sentiment avg
+
+                    // Retail hype avg (0..1)
+                    const rn = retailN[row.d] || 0;
+                    const rh = rn > 0 ? Math.min(1, (retailHypeSum[row.d] / rn)) : 0;
+
+                    // Z-score noise -> clamp to -5..5 -> rescale 0..100
+                    const zNoise = (rawCombined[idx] - combMean) / combStd;
+                    const noiseRaw = Math.max(-5, Math.min(5, zNoise));   // -5..5
+                    const noise_index = parseFloat(((noiseRaw + 5) * 10).toFixed(2));  // 0..100
+
+                    // Swan flag (0 or 1)
+                    const swan = swanDays.has(row.d) ? 1 : 0;
+
+                    // Reason flags for zero/sparse days
+                    const reason_flags = [];
+                    if (nc === 0) reason_flags.push('NO_EVIDENCE_NEWS');
+                    if (re === 0) reason_flags.push('NO_EVIDENCE_RETAIL');
+                    if (combStd === 1) reason_flags.push('ZERO_VARIANCE');
+
                     return {
                         ...row,
-                        news_volume: nVol,
-                        retail_chatter_volume: rVol,
-                        noise_index: 0.6 * nVol + 0.4 * rVol,
-                        news_sentiment_index: nVol, // Proxy for volume
-                        retail_hype_index: rVol
+                        // Canonical fields (used in computeSubsetValidation, charts)
+                        news_volume: nv,
+                        retail_chatter_volume: rv,
+                        noise_index,
+                        news_sentiment_index: ns,
+                        retail_hype_index: rh,
+                        swan,
+                        reason_flags,
+                        // Short-form ALIASES used by tooltip, heatmap bands, getVal
+                        nv: nc,          // raw news item count for tooltip
+                        ns,              // news sentiment avg -1..1
+                        rv: re,          // raw retail engagement count
+                        rh,              // retail hype 0..1
+                        noise: noise_index / 100 * 8 - 4,  // legacy noise (-4..4) for getVal('noise') path
                     };
                 });
             },
@@ -1680,6 +1765,66 @@
                 const cachesLoaded = (DataHub._newsCache && DataHub._newsCache.length > 0) && (DataHub._retailCache && DataHub._retailCache.length > 0);
                 results.push({ id: 'ch', label: 'JSON Caches Loaded', status: cachesLoaded ? 'PASS' : 'FAIL' });
                 return results;
+            },
+            // Block4-B: Window-level shock score aggregation
+            computeShockScore: (evidenceItems) => {
+                if (!evidenceItems || evidenceItems.length === 0) return { shock_score: 0, direction_bias: 'UNCLEAR', confidence: 'LOW', rationale: 'No evidence in window.' };
+
+                const PROVIDER_QUALITY = { 'Bloomberg': 5, 'Reuters': 5, 'WSJ': 4, 'Financial Times': 4, 'Seeking Alpha': 3, 'reddit': 2, 'stocktwits': 2 };
+
+                // De-duplicate keys by (provider, title-hash, day)
+                const seen = new Set();
+                const unique = evidenceItems.filter(item => {
+                    const day = (item.published_at_utc || item.d || '').split('T')[0];
+                    const key = `${item.provider}|${(item.title || '').substring(0, 30)}|${day}`;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
+
+                const providers = new Set(unique.map(it => it.provider));
+                const novelty = providers.size / Math.max(unique.length, 1);
+
+                let rawShock = 0;
+                unique.forEach(item => {
+                    const qual = PROVIDER_QUALITY[item.provider] || 2;
+                    const sentMag = Math.abs(item.metrics?.sentiment || item.score || 0);
+                    const eng = Math.log10((item.metrics?.engagement || 1) + 1);
+                    rawShock += qual * sentMag * eng;
+                });
+
+                // Normalize by item count and novelty
+                const shock_score = parseFloat(Math.min(10, rawShock * novelty / Math.max(unique.length, 1) * 5).toFixed(2));
+
+                // Direction bias: weighted average sentiment sign
+                const wSent = unique.reduce((sum, it) => {
+                    const q = PROVIDER_QUALITY[it.provider] || 2;
+                    return sum + (it.metrics?.sentiment || 0) * q;
+                }, 0);
+                const avgWS = wSent / Math.max(unique.length, 1);
+                const direction_bias = shock_score >= 4 ? (avgWS < -0.05 ? 'DRAWDOWN' : avgWS > 0.05 ? 'SQUEEZE' : 'UNCLEAR') : 'REVERSION';
+
+                const confidence = shock_score >= 7 ? 'HIGH' : shock_score >= 4 ? 'MEDIUM' : 'LOW';
+                const rationale = `shock=${shock_score} | unique=${unique.length} | sources=${providers.size} | avg_sent=${avgWS.toFixed(2)} | novelty=${novelty.toFixed(2)}`;
+
+                return { shock_score, direction_bias, confidence, rationale };
+            },
+            // Block4-A: Get borrow proxy metrics for a ticker from snapshot or CSV
+            getBorrowProxy: (ticker) => {
+                if (DataHub._dailySnapshot?.tickers?.[ticker]) {
+                    return DataHub._dailySnapshot.tickers[ticker].pro_metrics_proxy;
+                }
+                // Fallback: compute from CSV data
+                const rows = DataHub._store.filter(r => r.Ticker === ticker);
+                if (rows.length === 0) return null;
+                const latest = rows[rows.length - 1];
+                const siPct = parseFloat(latest['S3SIPctFloat'] || 0) * 100 || parseFloat(latest['Short Interest'] || 0) / parseFloat(latest['S3Float'] || 1) * 100;
+                return {
+                    days_to_cover: parseFloat((siPct / 3).toFixed(2)),
+                    borrow_fee_pct_est: parseFloat(Math.min(50, siPct * 0.8).toFixed(2)),
+                    utilization_proxy: parseFloat(Math.min(100, siPct * 2.5).toFixed(2)),
+                    proxy_label: 'PROXY — computed from SI% / avg_float_turnover. NOT real borrow cost data.'
+                };
             }
         };
 
@@ -1773,6 +1918,15 @@
                 }, 800); // simulate async retrieval -> normalize -> validate
             });
         };
+
+        // Block4-C: Ticker → Sector → Default Regime mapping
+        const TICKER_SECTOR_MAP = {
+            AFRM: 'fintech', SQ: 'fintech', PYPL: 'payments', SHOP: 'ecommerce', TSLA: 'ev'
+        };
+        const SECTOR_DEFAULT_SCENARIO = {
+            fintech: 'liquidity_crunch', payments: 'regulatory_shock', ecommerce: 'slow_covering', ev: 'meme_surge'
+        };
+        const getDefaultScenarioForTicker = (t) => SECTOR_DEFAULT_SCENARIO[TICKER_SECTOR_MAP[t]] || 'liquidity_crunch';
 
         const ScenarioLibrary = {
             liquidity_crunch: { scenario_id: 'liquidity_crunch', name: 'Liquidity Crunch', narrative: 'Sudden evaporation of short-term liquidity causing spread blowouts.', shocks: [{ var: 'noise', delta: 2.0, duration_days: 10 }], expected_failure_modes: ['correlations_break', 'extreme_severity_degradation'] },
@@ -1968,7 +2122,9 @@
                 enableScenarioLibrary: true,
                 enableSyntheticSliders: true,
                 enableFidelityDecomposition: true,
-                enableRegimeOverlay: true
+                enableRegimeOverlay: true,
+                SQUEEZE_ORACLE_MODE: false,        // Block4-A: reads daily_snapshot.json when ON
+                showDemoLiveLabel: true            // Block4-A: shows DEMO/LIVE badge in header
             });
 
             // Circuit Breaker Wrapper
@@ -2272,6 +2428,9 @@
                 setAudit(null);
                 setSynthetic([]);
                 setActivePeak(p[0]);
+                // Block4-C: Auto-select regime based on ticker sector
+                const autoScenario = getDefaultScenarioForTicker(ticker);
+                setScenario(autoScenario);
             }, [ticker, rankMode]);
 
             const dynamicValidation = useMemo(() => {
@@ -2327,10 +2486,12 @@
                 evidenceRetail: retail,
                 mode: viewMode
             });
-            const current = merged.find(d => d.d === filterDate) || merged[0] || { squeeze: 0, crowded: 0, noise: 0 };
+            // FIX: fallback must include noise_index (not just noise) + short-form aliases
+            const _emptyRow = { squeeze: 0, crowded: 0, noise: 0, noise_index: 0, nv: 0, ns: 0, rv: 0, rh: 0, swan: 0, si: 0, reason_flags: [] };
+            const current = merged.find(d => d.d === filterDate) || merged[0] || _emptyRow;
 
             // Scatter Data (Visual only)
-            const scatterPoints = useMemo(() => merged.map(d => ({ x: d.noise, y: d.squeeze / 100 })), [merged]);
+            const scatterPoints = useMemo(() => merged.map(d => ({ x: d.noise_index / 100, y: d.squeeze / 100 })), [merged]);
 
             const width = 800, height = 300, p = 30;
             const xMax = width - p * 2, yMax = height - p * 2;
@@ -2339,7 +2500,10 @@
             const getVal = (d) => {
                 if (metric === 'si') return d.si * 100;
                 if (metric === 'crowded') return d.crowded;
-                if (metric === 'noise') return (d.noise + 10) * 5; // Scaling noise for visual path
+                if (metric === 'noise') return d.noise_index || 0; // noise_index is 0..100, matches chart scale
+                if (metric === 'nv') return Math.min(100, (d.nv || 0) * 5);  // scale raw count
+                if (metric === 'rv') return Math.min(100, (d.rv || 0) / 10); // scale raw engagement
+                if (metric === 'rh') return (d.rh || 0) * 100;              // 0..1 -> 0..100
                 return d.squeeze;
             };
 
@@ -2397,11 +2561,22 @@
                         <div className="agent-status-strip">
                             <div style={{ display: 'flex', gap: 15, alignItems: 'center' }}>
                                 <span style={{ fontWeight: 800, color: 'var(--primary)' }}>DEPLOY_READY</span>
-                                <div style={{ display: 'flex', gap: 10 }}>
-                                    <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>Live Demo</a>
-                                    <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>GitHub Repo</a>
-                                    <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>PDF Report</a>
-                                </div>
+                                {/* Block4-A: DEMO/LIVE data-source badge */}
+                                {flags.showDemoLiveLabel && (
+                                    <span style={{
+                                        fontSize: '0.55rem', fontWeight: 800, padding: '1px 6px', borderRadius: 3,
+                                        background: DataHub._liveNewsLoaded ? 'rgba(16,185,129,0.2)' : 'rgba(251,191,36,0.15)',
+                                        color: DataHub._liveNewsLoaded ? '#10b981' : '#fbbf24',
+                                        border: `1px solid ${DataHub._liveNewsLoaded ? '#10b981' : '#fbbf24'}`
+                                    }}>
+                                        {DataHub._liveNewsLoaded ? '● LIVE' : '○ DEMO'}
+                                    </span>
+                                )}
+                                {flags.SQUEEZE_ORACLE_MODE && DataHub._dailySnapshot && (
+                                    <span style={{ fontSize: '0.55rem', color: '#8b5cf6', fontWeight: 800, border: '1px solid #8b5cf6', padding: '1px 5px', borderRadius: 3 }}>
+                                        ORACLE:{DataHub._dailySnapshot.snapshot_date}
+                                    </span>
+                                )}
                             </div>
 
                             <div style={{ flex: 1, textAlign: 'center', opacity: runContext.orchestratorStatus === 'Complete' ? 0.7 : 1 }}>
@@ -2431,8 +2606,38 @@
                                         EXPORT RUN_ARTIFACT
                                     </button>
                                 )}
+                                {/* Block4-C: Combo export button */}
+                                {runContext.runArtifact && synthetic.length > 0 && (
+                                    <button
+                                        className="tab-btn"
+                                        style={{ fontSize: '0.6rem', padding: '2px 8px', border: '1px solid #8b5cf6', color: '#8b5cf6', borderRadius: '4px' }}
+                                        title="Download synthetic_dataset.csv + run_artifact.json"
+                                        onClick={() => {
+                                            // Download CSV
+                                            const hdr = Object.keys(synthetic[0]).join(',');
+                                            const rows = synthetic.map(r => Object.values(r).join(',')).join('\n');
+                                            const csvBlob = new Blob([hdr + '\n' + rows], { type: 'text/csv' });
+                                            const a1 = document.createElement('a');
+                                            a1.href = URL.createObjectURL(csvBlob);
+                                            a1.download = `synthetic_dataset_${ticker}_${Date.now()}.csv`;
+                                            document.body.appendChild(a1); a1.click(); document.body.removeChild(a1);
+                                            URL.revokeObjectURL(a1.href);
+                                            // Download JSON (slight delay)
+                                            setTimeout(() => {
+                                                const jsonBlob = new Blob([JSON.stringify(runContext.runArtifact, null, 2)], { type: 'application/json' });
+                                                const a2 = document.createElement('a');
+                                                a2.href = URL.createObjectURL(jsonBlob);
+                                                a2.download = `run_artifact_${ticker}_${Date.now()}.json`;
+                                                document.body.appendChild(a2); a2.click(); document.body.removeChild(a2);
+                                                URL.revokeObjectURL(a2.href);
+                                            }, 400);
+                                        }}
+                                    >
+                                        ⬇ EXPORT ALL
+                                    </button>
+                                )}
                                 <div style={{ opacity: 0.6 }}>
-                                    v1.0.12| <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
+                                    v1.0.13| <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
                                 </div>
                             </div>
                         </div>
@@ -2495,6 +2700,27 @@
                                                 )}
                                             </div>
                                         )}
+                                        {/* Cross-validation summary — data plumbing fix */}
+                                        <div className="diag-item" style={{ marginTop: 10, borderTop: '1px solid #333', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                            <div style={{ fontSize: 8, opacity: 0.6, marginBottom: 3 }}>SERIES CROSS-VALIDATION</div>
+                                            {(() => {
+                                                const fd = filteredData;
+                                                const nDays = fd.length;
+                                                const nNonzeroNews = fd.filter(r => (r.nv || 0) > 0).length;
+                                                const nNonzeroRetail = fd.filter(r => (r.rv || 0) > 0).length;
+                                                const nNonzeroSwans = fd.filter(r => r.swan === 1).length;
+                                                const avgNoise = nDays > 0 ? (fd.reduce((a, r) => a + (r.noise_index || 0), 0) / nDays) : 0;
+                                                const allFinite = fd.every(r => isFinite(r.squeeze) && isFinite(r.crowded) && isFinite(r.noise_index) && isFinite(r.nv) && isFinite(r.ns) && isFinite(r.rv) && isFinite(r.rh));
+                                                const src = DataHub._liveNewsLoaded ? 'LIVE' : 'OFFLINE';
+                                                return (<>
+                                                    <div style={{ fontSize: 7, color: '#60a5fa' }}>NOISE: avg={avgNoise.toFixed(1)} | source={src}</div>
+                                                    <div style={{ fontSize: 7, color: '#10b981' }}>NEWS_SERIES: days={nDays} nonzero={nNonzeroNews}</div>
+                                                    <div style={{ fontSize: 7, color: '#8b5cf6' }}>RETAIL_SERIES: days={nDays} nonzero={nNonzeroRetail}</div>
+                                                    <div style={{ fontSize: 7, color: nNonzeroSwans > 0 ? '#ef4444' : '#6b7280' }}>SWAN_EVENTS: {nNonzeroSwans}</div>
+                                                    <div style={{ fontSize: 6, color: allFinite ? '#10b981' : '#ef4444', marginTop: 2 }}>{allFinite ? '✓ ALL_FIELDS_FINITE' : '✗ NaN/undef DETECTED'}</div>
+                                                </>);
+                                            })()}
+                                        </div>
                                         <div className="diag-item" style={{ marginTop: 10, borderTop: '1px solid #333', paddingTop: 10 }}>
                                             <div style={{ fontSize: 8, opacity: 0.6, marginBottom: 5 }}>CIRCUIT BREAKERS</div>
                                             {Object.entries(flags).map(([f, v]) => (
@@ -2601,12 +2827,26 @@
                                     <div>LAG_N: <strong>{validation.n}</strong></div>
                                     <div>LAG_CORR: <strong>{validation.lag48?.noise_si.toFixed(4)}</strong></div>
                                     <div style={{ fontSize: '0.45rem', opacity: 0.5 }}>FP: {validation.fingerprint}</div>
+                                    {/* Block4-A: Borrow cost proxy display */}
+                                    {(() => {
+                                        const bp = DataHub.getBorrowProxy(ticker);
+                                        return bp ? (
+                                            <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', marginTop: 6, paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                                <div style={{ fontWeight: 800, color: '#f59e0b', marginBottom: 2, fontSize: '0.5rem' }}>SQUEEZE ORACLE METRICS <span style={{ color: '#6b7280' }}>(PROXY)</span></div>
+                                                <div>DAYS_TO_COVER: <strong style={{ color: '#f59e0b' }}>{bp.days_to_cover}d</strong> <span style={{ opacity: 0.4, fontSize: '0.45rem' }}>PROXY</span></div>
+                                                <div>BORROW_FEE_EST: <strong style={{ color: '#f59e0b' }}>{bp.borrow_fee_pct_est}%</strong> <span style={{ opacity: 0.4, fontSize: '0.45rem' }}>PROXY</span></div>
+                                                <div>UTILIZATION_EST: <strong style={{ color: '#f59e0b' }}>{bp.utilization_proxy}%</strong> <span style={{ opacity: 0.4, fontSize: '0.45rem' }}>PROXY</span></div>
+                                                <div style={{ fontSize: '0.4rem', color: '#6b7280', marginTop: 2 }}>{bp.proxy_label}</div>
+                                            </div>
+                                        ) : null;
+                                    })()}
                                     <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', marginTop: 8, paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
                                         <div style={{ fontWeight: 800, color: '#10b981', marginBottom: 2 }}>TASK 1 COMPLIANCE PASS</div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icons.Flag color="#10b981" size={10} /> <span>Focus Tickers Enforced</span></div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icons.Flag color="#10b981" size={10} /> <span>CSV Ranked Peaks</span></div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icons.Flag color="#10b981" size={10} /> <span>Offline Cache Linked</span></div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icons.Flag color="#10b981" size={10} /> <span>Pearson Real Correlate</span></div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icons.Flag color="#10b981" size={10} /> <span>Borrow Proxy: PROXY (SI-derived)</span></div>
                                     </div>
                                 </div>
                             </details>
@@ -2643,7 +2883,7 @@
                                 </div>
                                 <div className="stat-card">
                                     <span className="stat-label">Noise Index</span>
-                                    <span className="stat-value" style={{ color: '#3b82f6' }}>{safeNum(current?.noise, 2)}</span>
+                                    <span className="stat-value" style={{ color: '#3b82f6' }}>{safeNum(current?.noise_index, 1)}</span>
                                 </div>
                             </div>
 
@@ -2695,9 +2935,9 @@
                                                 const xPos = getX(i) - w / 2;
                                                 return (
                                                     <g key={i}>
-                                                        {bands.news && <rect x={xPos} y={height - p - 35} width={w} height={8} fill={d.ns >= 0 ? '#10b981' : '#ef4444'} opacity={Math.abs(d.ns) * 2 + 0.1} />}
-                                                        {bands.retail && <rect x={xPos} y={height - p - 25} width={w} height={8} fill={d.rh >= 0.7 ? '#10b981' : '#ef4444'} opacity={d.rh - 0.2} />}
-                                                        {bands.noise && <rect x={xPos} y={height - p - 15} width={w} height={8} fill="#3b82f6" opacity={Math.abs(d.noise) / 8 + 0.1} />}
+                                                        {bands.news && <rect x={xPos} y={height - p - 35} width={w} height={8} fill={(d.ns || 0) >= 0 ? '#10b981' : '#ef4444'} opacity={Math.min(0.9, Math.abs(d.ns || 0) * 2 + 0.1)} />}
+                                                        {bands.retail && <rect x={xPos} y={height - p - 25} width={w} height={8} fill={(d.rh || 0) >= 0.5 ? '#10b981' : '#ef4444'} opacity={Math.min(0.9, (d.rh || 0) + 0.1)} />}
+                                                        {bands.noise && <rect x={xPos} y={height - p - 15} width={w} height={8} fill="#3b82f6" opacity={Math.min(0.9, (d.noise_index || 0) / 100 * 0.8 + 0.1)} />}
                                                     </g>
                                                 );
                                             })}
@@ -2738,7 +2978,7 @@
                                             <span style={{ opacity: 0.6 }}>SI %:</span><span>{safeNum(filteredData[hoverIdx]?.si * 100, 2)}</span>
                                             <span style={{ opacity: 0.6 }}>Crowded:</span><span>{safeNum(filteredData[hoverIdx]?.crowded, 1)}</span>
                                             <span style={{ opacity: 0.6 }}>Squeeze:</span><span>{safeNum(filteredData[hoverIdx]?.squeeze, 1)}</span>
-                                            <span style={{ opacity: 0.6 }}>Noise:</span><span>{safeNum(filteredData[hoverIdx]?.noise, 2)}</span>
+                                            <span style={{ opacity: 0.6 }}>Noise:</span><span>{safeNum(filteredData[hoverIdx]?.noise_index, 1)}</span>
                                             <span style={{ opacity: 0.6 }}>News Vol:</span><span>{safeNum(filteredData[hoverIdx]?.nv, 0)}</span>
                                             <span style={{ opacity: 0.6 }}>News Sent:</span><span>{safeNum(filteredData[hoverIdx]?.ns, 2)}</span>
                                             <span style={{ opacity: 0.6 }}>Ret Vol:</span><span>{safeNum(filteredData[hoverIdx]?.rv, 0)}</span>
@@ -2798,6 +3038,41 @@
                                                 </div>
                                             </div>
                                         ))}
+
+                                        {/* Block4-B: Shock vs Reversion decision card */}
+                                        {runSafe('enableInstitutionalShockScore', () => {
+                                            const allEv = [...safeArr(evidence.news), ...safeArr(evidence.retail)];
+                                            const shock = DataHub.computeShockScore(allEv);
+                                            const biasColor = shock.direction_bias === 'DRAWDOWN' ? '#ef4444' : shock.direction_bias === 'SQUEEZE' ? '#10b981' : '#f59e0b';
+                                            const confColor = shock.confidence === 'HIGH' ? '#10b981' : shock.confidence === 'MEDIUM' ? '#f59e0b' : '#6b7280';
+                                            return (
+                                                <div className="glass" style={{ padding: '0.85rem', background: 'rgba(59,130,246,0.05)', border: `1px solid ${biasColor}44`, borderRadius: 8 }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                                        <div style={{ fontSize: '0.7rem', fontWeight: 800, color: '#60a5fa' }}>⚡ SHOCK vs REVERSION</div>
+                                                        <span style={{ fontSize: '0.5rem', color: '#fbbf24', fontWeight: 800, border: '1px solid #fbbf24', padding: '1px 5px', borderRadius: 2 }}>DEMO</span>
+                                                    </div>
+                                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, fontSize: '0.6rem' }}>
+                                                        <div style={{ textAlign: 'center' }}>
+                                                            <div style={{ opacity: 0.5, fontSize: '0.5rem' }}>SHOCK</div>
+                                                            <div style={{ fontWeight: 900, fontSize: '1.1rem', color: biasColor }}>{shock.shock_score}</div>
+                                                        </div>
+                                                        <div style={{ textAlign: 'center' }}>
+                                                            <div style={{ opacity: 0.5, fontSize: '0.5rem' }}>BIAS</div>
+                                                            <div style={{ fontWeight: 800, color: biasColor }}>{shock.direction_bias}</div>
+                                                        </div>
+                                                        <div style={{ textAlign: 'center' }}>
+                                                            <div style={{ opacity: 0.5, fontSize: '0.5rem' }}>CONF</div>
+                                                            <div style={{ fontWeight: 800, color: confColor }}>{shock.confidence}</div>
+                                                        </div>
+                                                        <div style={{ textAlign: 'center' }}>
+                                                            <div style={{ opacity: 0.5, fontSize: '0.5rem' }}>EV</div>
+                                                            <div style={{ fontWeight: 800 }}>{allEv.length}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ marginTop: 6, fontSize: '0.5rem', opacity: 0.5, fontFamily: 'JetBrains Mono', wordBreak: 'break-all' }}>{shock.rationale}</div>
+                                                </div>
+                                            );
+                                        })}
 
                                         {/* ECON THEORY CHECKS CARD */}
                                         {runContext.theoryChecks && runContext.theoryChecks.length > 0 && (
