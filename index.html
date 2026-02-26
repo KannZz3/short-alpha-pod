@@ -3,7 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover, minimum-scale=0.5, maximum-scale=5, user-scalable=yes" />
     <title>Short-Alpha Pod | Synthesis Matrix</title>
     <!-- Critical Libraries -->
     <script>
@@ -776,6 +777,26 @@
 
         const bootDot = document.getElementById('dot-boot');
         if (bootDot) bootDot.className = 'dot active';
+
+        // --- WECHAT COMPATIBILITY & ZOOM CONTROL ---
+        const isWeChat = /MicroMessenger/i.test(navigator.userAgent);
+        if (!isWeChat) {
+            // Prevent pinch-zoom in normal mobile browsers (Safari/Chrome) using JS listeners 
+            // instead of hard viewport lock, ensuring WeChat remains zoomable.
+            document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
+            document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
+            document.addEventListener('gestureend', e => e.preventDefault(), { passive: false });
+
+            // Optional: Prevent double-tap zoom
+            let lastTouchEnd = 0;
+            document.addEventListener('touchend', (e) => {
+                const now = Date.now();
+                if (now - lastTouchEnd <= 300) {
+                    e.preventDefault();
+                }
+                lastTouchEnd = now;
+            }, false);
+        }
     </script>
 
     <script type="text/babel">
@@ -1181,6 +1202,36 @@
             </div>
         );
 
+        const WeChatBanner = () => {
+            const [visible, setVisible] = useState(/MicroMessenger/i.test(navigator.userAgent));
+            if (!visible) return null;
+            return (
+                <div style={{
+                    background: 'rgba(59, 130, 246, 0.9)',
+                    color: 'white',
+                    padding: '8px 16px',
+                    fontSize: '0.75rem',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    zIndex: 2000,
+                    position: 'relative',
+                    backdropFilter: 'blur(8px)',
+                    borderBottom: '1px solid rgba(255,255,255,0.1)'
+                }}>
+                    <span>📱 <b>WeChat Browser Detected:</b> Pinch to zoom out for full view, or open in Safari.</span>
+                    <button onClick={() => setVisible(false)} style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'white',
+                        fontSize: '1rem',
+                        cursor: 'pointer',
+                        padding: '0 5px'
+                    }}>×</button>
+                </div>
+            );
+        };
+
         const App = () => {
             const tickers = ["TSLA", "AFRM", "SQ", "PYPL", "SHOP"];
             const [ticker, setTicker] = useState("TSLA");
@@ -1545,6 +1596,7 @@
 
             return (
                 <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)' }}>
+                    <WeChatBanner />
                     <div className="app-header-container">
                         {/* Share / Resume Header */}
                         <div className="share-header" style={{
