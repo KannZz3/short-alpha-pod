@@ -3,8 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport"
-        content="width=device-width, initial-scale=1, viewport-fit=cover, minimum-scale=0.5, maximum-scale=5, user-scalable=yes" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Short-Alpha Pod | Synthesis Matrix</title>
     <!-- Critical Libraries -->
     <script>
@@ -70,6 +69,13 @@
             padding-left: env(safe-area-inset-left);
             padding-right: env(safe-area-inset-right);
             padding-bottom: env(safe-area-inset-bottom);
+            -webkit-text-size-adjust: 100% !important;
+            text-size-adjust: 100% !important;
+        }
+
+        html {
+            -webkit-text-size-adjust: 100% !important;
+            text-size-adjust: 100% !important;
         }
 
         /* --- DIAGNOSTICS OVERLAY (POPOVER) --- */
@@ -780,7 +786,24 @@
 
         // --- WECHAT COMPATIBILITY & ZOOM CONTROL ---
         const isWeChat = /MicroMessenger/i.test(navigator.userAgent);
-        if (!isWeChat) {
+
+        if (isWeChat) {
+            // WeChat Font Scaling Lock (WeixinJSBridge)
+            const lockWeChatFont = () => {
+                if (typeof WeixinJSBridge !== "undefined" && WeixinJSBridge.invoke) {
+                    WeixinJSBridge.invoke('setFontSizeCallback', { 'fontSize': 0 });
+                    WeixinJSBridge.on('menu:setfont', () => {
+                        WeixinJSBridge.invoke('setFontSizeCallback', { 'fontSize': 0 });
+                    });
+                }
+            };
+
+            if (typeof WeixinJSBridge === "undefined") {
+                document.addEventListener("WeixinJSBridgeReady", lockWeChatFont, false);
+            } else {
+                lockWeChatFont();
+            }
+        } else {
             // Prevent pinch-zoom in normal mobile browsers (Safari/Chrome) using JS listeners 
             // instead of hard viewport lock, ensuring WeChat remains zoomable.
             document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
