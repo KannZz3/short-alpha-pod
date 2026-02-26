@@ -976,6 +976,10 @@
                     if (retailLiveRes && retailLiveRes.ok) { DataHub._retailCache = await retailLiveRes.json(); DataHub._liveRetailLoaded = true; }
                     else if (retailRes && retailRes.ok) { DataHub._retailCache = await retailRes.json(); }
 
+                    // Enrich quality_flags on every cache item based on URL integrity
+                    DataHub.enrichCacheFlags(DataHub._newsCache);
+                    DataHub.enrichCacheFlags(DataHub._retailCache);
+
                     // Block4-A: Load regime catalog (graceful fail)
                     try {
                         const regimeRes = await fetch(BASE + "data/regime_catalog.json");
@@ -1808,6 +1812,46 @@
                 const rationale = `shock=${shock_score} | unique=${unique.length} | sources=${providers.size} | avg_sent=${avgWS.toFixed(2)} | novelty=${novelty.toFixed(2)}`;
 
                 return { shock_score, direction_bias, confidence, rationale };
+            },
+            // URL integrity classifier — returns classification string and mutates quality_flags array.
+            // DEMO_PLACEHOLDER = any URL from a demo-mode item (all current cache items).
+            // INVALID_URL = malformed (apostrophe in domain, no https://).
+            // PLACEHOLDER_URL = placeholder.com / placeholder-social.com / example.com.
+            // EMPTY_URL = empty or missing URL.
+            classifyUrl: (url, mode, qualityFlags) => {
+                const flags = qualityFlags || [];
+                const addFlag = (f) => { if (!flags.includes(f)) flags.push(f); };
+                const PLACEHOLDER_DOMAINS = ['placeholder.com', 'placeholder-social.com', 'example.com'];
+
+                if (!url || url.trim() === '') {
+                    addFlag('EMPTY_URL'); return 'EMPTY';
+                }
+                if (!url.startsWith('https://')) {
+                    addFlag('INVALID_URL'); return 'INVALID_SYNTAX';
+                }
+                try {
+                    const domain = new URL(url).hostname.toLowerCase();
+                    if (domain.includes("'") || domain.includes('\u2019')) {
+                        addFlag('INVALID_URL'); return 'INVALID_SYNTAX';
+                    }
+                    if (PLACEHOLDER_DOMAINS.some(d => domain === d || domain.endsWith('.' + d))) {
+                        addFlag('PLACEHOLDER_URL'); return 'PLACEHOLDER';
+                    }
+                } catch (_) {
+                    addFlag('INVALID_URL'); return 'INVALID_SYNTAX';
+                }
+                // All DEMO-mode items have constructed slugs (not real articles)
+                if (mode === 'DEMO' || !DataHub._liveNewsLoaded) {
+                    addFlag('DEMO_PLACEHOLDER'); return 'CONSTRUCTED_DEMO';
+                }
+                return 'OK';
+            },
+            // Enrich quality_flags on all items in a cache array in-place.
+            enrichCacheFlags: (cache) => {
+                (cache || []).forEach(item => {
+                    if (!Array.isArray(item.quality_flags)) item.quality_flags = [];
+                    DataHub.classifyUrl(item.url, item.mode, item.quality_flags);
+                });
             },
             // Block4-A: Get borrow proxy metrics for a ticker from snapshot or CSV
             getBorrowProxy: (ticker) => {
@@ -3886,13 +3930,41 @@
                                             ))}
                                         </div>
                                     </div>
-                                    {provenanceItem.url && provenanceItem.url !== '#' && (
-                                        <div style={{ marginTop: 10 }}>
-                                            <a href={provenanceItem.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', textAlign: 'center', background: 'var(--primary)', color: 'black', textDecoration: 'none', padding: '10px', borderRadius: 8, fontWeight: 800, fontSize: '0.75rem' }}>
-                                                VIEW ORIGINAL SOURCE
-                                            </a>
-                                        </div>
-                                    )}
+                                    {/* VIEW ORIGINAL SOURCE — gated: only show if URL is not DEMO/broken/empty.
+                                         All current DEMO cache URLs are constructed slugs (not real articles).
+                                         classifyUrl() enriches quality_flags at load time. */
+                                    }
+                                    {(() => {
+                                        const url = provenanceItem.url;
+                                        const flags = provenanceItem.quality_flags || [];
+                                        const isBroken = !url || flags.some(f =>
+                                            ['EMPTY_URL', 'INVALID_URL', 'PLACEHOLDER_URL', 'DEMO_PLACEHOLDER'].includes(f));
+                                        const label = flags.includes('EMPTY_URL')
+                                            ? 'EMPTY URL'
+                                            : flags.includes('INVALID_URL')
+                                                ? 'BROKEN_URL'
+                                                : flags.includes('PLACEHOLDER_URL')
+                                                    ? 'PLACEHOLDER URL'
+                                                    : flags.includes('DEMO_PLACEHOLDER')
+                                                        ? 'DEMO \u2014 no external link'
+                                                        : 'VIEW ORIGINAL SOURCE';
+                                        return isBroken ? (
+                                            <div style={{ marginTop: 10 }}>
+                                                <div style={{ display: 'block', textAlign: 'center', background: 'rgba(107,114,128,0.2)', color: '#6b7280', padding: '10px', borderRadius: 8, fontWeight: 800, fontSize: '0.75rem', border: '1px solid #374151', cursor: 'not-allowed' }}>
+                                                    🔒 {label}
+                                                </div>
+                                                <div style={{ fontSize: '0.55rem', opacity: 0.5, textAlign: 'center', marginTop: 4 }}>
+                                                    {flags.join(' · ')}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div style={{ marginTop: 10 }}>
+                                                <a href={url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', textAlign: 'center', background: 'var(--primary)', color: 'black', textDecoration: 'none', padding: '10px', borderRadius: 8, fontWeight: 800, fontSize: '0.75rem' }}>
+                                                    VIEW ORIGINAL SOURCE ↗
+                                                </a>
+                                            </div>
+                                        );
+                                    })()}
 
                                     {/* Also Seen As Section */}
                                     {provenanceItem.duplicates && provenanceItem.duplicates.length > 0 && (
@@ -3906,9 +3978,15 @@
                                                             <span style={{ opacity: 0.5 }}>{dup.published_at_utc.split('T')[0]}</span>
                                                         </div>
                                                         <div style={{ fontStyle: 'italic', opacity: 0.8, marginBottom: 4 }}>"{dup.excerpt || dup.title}"</div>
-                                                        {dup.url && dup.url !== '#' && (
-                                                            <a href={dup.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--secondary)', textDecoration: 'none', fontSize: '0.6rem' }}>View Source ↗</a>
-                                                        )}
+                                                        {/* Gated View Source link for duplicates — same rules */}
+                                                        {(() => {
+                                                            const du = dup.url;
+                                                            const df = dup.quality_flags || [];
+                                                            const isOk = du && du.startsWith('https://') && !df.some(f => ['EMPTY_URL', 'INVALID_URL', 'PLACEHOLDER_URL', 'DEMO_PLACEHOLDER'].includes(f));
+                                                            return isOk
+                                                                ? <a href={du} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--secondary)', textDecoration: 'none', fontSize: '0.6rem' }}>View Source ↗</a>
+                                                                : <span style={{ fontSize: '0.55rem', color: '#6b7280', fontStyle: 'italic' }}>DEMO — no link</span>;
+                                                        })()}
                                                     </div>
                                                 ))}
                                             </div>
