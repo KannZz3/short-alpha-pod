@@ -217,17 +217,23 @@
             border-radius: 12px;
         }
 
+        .app-header-container {
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            width: 100%;
+            background: var(--bg);
+        }
+
         header {
             padding: 1rem 2rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid var(--border);
-            position: sticky;
-            top: 0;
-            z-index: 100;
             background: rgba(3, 7, 18, 0.85);
             backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
         }
 
         .logo-area {
@@ -330,33 +336,64 @@
 
         /* Mobile specific header wrapping (<= 520px) */
         @media (max-width: 520px) {
+            .app-header-container {
+                position: relative;
+                /* Disable sticky if ghosting persists, or keep fixed but safe */
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+            }
+
+            .share-header {
+                display: none !important;
+                /* Hide secondary header on mobile to prevent double-layers */
+            }
+
             header {
                 flex-direction: column !important;
                 align-items: stretch !important;
+                background: rgba(8, 12, 18, 0.95) !important;
+                /* Opaque bg to prevent ghosting */
+                padding: 1rem !important;
+                height: auto !important;
+                width: 100% !important;
+                max-width: 100vw !important;
+                left: 0 !important;
+                margin: 0 !important;
             }
 
             .logo-area {
                 width: 100%;
                 justify-content: space-between;
-                margin-bottom: 0.5rem;
+                margin-bottom: 0.8rem;
+                flex-wrap: wrap;
+                gap: 0.5rem;
             }
 
             header>div:last-child {
                 width: 100%;
                 justify-content: space-between;
-                gap: 0.5rem;
+                gap: 0.8rem;
                 flex-wrap: wrap;
             }
 
             .range-picker {
+                width: 100%;
+                display: flex;
+                gap: 4px;
+                flex-wrap: wrap;
+            }
+
+            .range-picker input {
                 flex: 1;
-                min-width: 180px;
+                min-width: 100px;
             }
 
             .tag-pill {
-                min-width: 140px;
+                width: 100% !important;
+                min-width: 100% !important;
                 justify-content: center;
-                flex: 1;
+                margin-top: 4px;
+                padding: 8px !important;
             }
         }
 
@@ -1456,102 +1493,94 @@
 
             return (
                 <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)' }}>
-                    {/* Share / Resume Header */}
-                    <div style={{
-                        background: 'rgba(16, 185, 129, 0.05)',
-                        borderBottom: '1px solid var(--primary-muted)',
-                        padding: '8px 20px',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        fontSize: '0.7rem'
-                    }}>
-                        <div style={{ display: 'flex', gap: 15, alignItems: 'center' }}>
-                            <span style={{ fontWeight: 800, color: 'var(--primary)' }}>DEPLOY_READY</span>
-                            <div style={{ display: 'flex', gap: 10 }}>
-                                <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>Live Demo</a>
-                                <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>GitHub Repo</a>
-                                <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>PDF Report</a>
+                    <div className="app-header-container">
+                        {/* Share / Resume Header */}
+                        <div className="share-header" style={{
+                            background: 'rgba(16, 185, 129, 0.05)',
+                            borderBottom: '1px solid var(--primary-muted)',
+                            padding: '8px 20px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '0.7rem'
+                        }}>
+                            <div style={{ display: 'flex', gap: 15, alignItems: 'center' }}>
+                                <span style={{ fontWeight: 800, color: 'var(--primary)' }}>DEPLOY_READY</span>
+                                <div style={{ display: 'flex', gap: 10 }}>
+                                    <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>Live Demo</a>
+                                    <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>GitHub Repo</a>
+                                    <a href="#" style={{ color: 'var(--text-muted)', textDecoration: 'none' }} onClick={e => e.preventDefault()}>PDF Report</a>
+                                </div>
+                            </div>
+                            <div style={{ opacity: 0.6 }}>
+                                v1.0.6-mobile-polish | <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
                             </div>
                         </div>
-                        <div style={{ opacity: 0.6 }}>
-                            v1.0.6-mobile-polish | <span style={{ color: 'var(--primary)' }}>BUILD_HASH: {validation.fingerprint}</span>
-                        </div>
-                    </div>
 
-                    <header style={{
-                        height: 66,
-                        borderBottom: '1px solid var(--border)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        padding: '0 1.5rem',
-                        justifyContent: 'space-between',
-                        background: 'rgba(3, 7, 18, 0.8)',
-                        backdropFilter: 'blur(12px)',
-                        zIndex: 100
-                    }}>
-                        <div className="logo-area">
-                            <div className="logo"><Icons.Shield color="#10b981" /> ALGO_POD</div>
+                        <header>
+                            <div className="logo-area">
+                                <div className="logo"><Icons.Shield color="#10b981" /> ALGO_POD</div>
 
-                            {/* Circuit Breaker Settings Mini-Panel */}
-                            <details className="glass" style={{ margin: '0 10px', fontSize: '0.6rem', padding: '2px 8px' }}>
-                                <summary style={{ cursor: 'pointer', opacity: 0.7 }}>PRO_MAX_FLAGS</summary>
-                                <div style={{ padding: '8px 0', display: 'grid', gap: 5 }}>
-                                    {Object.entries(flags).map(([f, v]) => (
-                                        <label key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                                            <input type="checkbox" checked={v} onChange={() => setFlags(p => ({ ...p, [f]: !p[f] }))} />
-                                            {f.replace('enable', '')}
-                                        </label>
-                                    ))}
-                                </div>
-                            </details>
-
-                            <select className="ticker-select" value={ticker} onChange={(e) => setTicker(e.target.value)}>
-                                {tickers.map(t => <option key={t} value={t}>{t}</option>)}
-                            </select>
-                            <div style={{ position: 'relative' }}>
-                                <button className="diag-btn" onClick={(e) => toggleDiag(e)} title="Diagnostics [D]">⚙︎</button>
-                                <div id="diagnostic-overlay" className="collapsed" onClick={(e) => e.stopPropagation()}>
-                                    <div className="diag-header">
-                                        <span>DIAGNOSTICS</span>
-                                        <span style={{ fontSize: 8, opacity: 0.5 }}>[D]</span>
-                                    </div>
-                                    <div className="diag-item">
-                                        <div id="dot-boot" className="dot"></div> BOOT
-                                    </div>
-                                    <div className="diag-item">
-                                        <div id="dot-data" className="dot"></div> DATA
-                                    </div>
-                                    <div className="diag-item">
-                                        <div id="dot-render" className="dot"></div> RENDER
-                                    </div>
-                                    <div className="diag-item" style={{ marginTop: 10, borderTop: '1px solid #333', paddingTop: 10 }}>
-                                        <div style={{ fontSize: 8, opacity: 0.6, marginBottom: 5 }}>CIRCUIT BREAKERS</div>
+                                {/* Circuit Breaker Settings Mini-Panel */}
+                                <details className="glass" style={{ margin: '0 10px', fontSize: '0.6rem', padding: '2px 8px' }}>
+                                    <summary style={{ cursor: 'pointer', opacity: 0.7 }}>PRO_MAX_FLAGS</summary>
+                                    <div style={{ padding: '8px 0', display: 'grid', gap: 5 }}>
                                         {Object.entries(flags).map(([f, v]) => (
-                                            <div key={f} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 7, marginBottom: 2 }}>
-                                                <span>{f.replace('enable', '')}</span>
-                                                <span style={{ color: v ? '#10b981' : '#ef4444' }}>{v ? 'ON' : 'OFF'}</span>
-                                            </div>
+                                            <label key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                                                <input type="checkbox" checked={v} onChange={() => setFlags(p => ({ ...p, [f]: !p[f] }))} />
+                                                {f.replace('enable', '')}
+                                            </label>
                                         ))}
                                     </div>
+                                </details>
+
+                                <select className="ticker-select" value={ticker} onChange={(e) => setTicker(e.target.value)}>
+                                    {tickers.map(t => <option key={t} value={t}>{t}</option>)}
+                                </select>
+                                <div style={{ position: 'relative' }}>
+                                    <button className="diag-btn" onClick={(e) => toggleDiag(e)} title="Diagnostics [D]">⚙︎</button>
+                                    <div id="diagnostic-overlay" className="collapsed" onClick={(e) => e.stopPropagation()}>
+                                        <div className="diag-header">
+                                            <span>DIAGNOSTICS</span>
+                                            <span style={{ fontSize: 8, opacity: 0.5 }}>[D]</span>
+                                        </div>
+                                        <div className="diag-item">
+                                            <div id="dot-boot" className="dot"></div> BOOT
+                                        </div>
+                                        <div className="diag-item">
+                                            <div id="dot-data" className="dot"></div> DATA
+                                        </div>
+                                        <div className="diag-item">
+                                            <div id="dot-render" className="dot"></div> RENDER
+                                        </div>
+                                        <div className="diag-item" style={{ marginTop: 10, borderTop: '1px solid #333', paddingTop: 10 }}>
+                                            <div style={{ fontSize: 8, opacity: 0.6, marginBottom: 5 }}>CIRCUIT BREAKERS</div>
+                                            {Object.entries(flags).map(([f, v]) => (
+                                                <div key={f} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 7, marginBottom: 2 }}>
+                                                    <span>{f.replace('enable', '')}</span>
+                                                    <span style={{ color: v ? '#10b981' : '#ef4444' }}>{v ? 'ON' : 'OFF'}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
-                            <div className="range-picker">
-                                <input type="text" value={range.start} onChange={(e) => setRange({ ...range, start: e.target.value })} />
-                                <span style={{ opacity: 0.5 }}>→</span>
-                                <input type="text" value={range.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
-                                <button className="range-btn" onClick={() => {
-                                    const d = new Date(activePeak.date);
-                                    const s = new Date(d); s.setDate(d.getDate() - 10);
-                                    const e = new Date(d); e.setDate(d.getDate() + 10);
-                                    setRange({ start: s.toISOString().split('T')[0], end: e.toISOString().split('T')[0] });
-                                }}>JUMP_TO_SELECTED_PEAK_WINDOW</button>
+                            <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                                <div className="range-picker">
+                                    <input type="text" value={range.start} onChange={(e) => setRange({ ...range, start: e.target.value })} />
+                                    <span style={{ opacity: 0.5 }}>→</span>
+                                    <input type="text" value={range.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
+                                    <button className="range-btn" onClick={() => {
+                                        const d = new Date(activePeak.date);
+                                        const s = new Date(d); s.setDate(d.getDate() - 10);
+                                        const e = new Date(d); e.setDate(d.getDate() + 10);
+                                        setRange({ start: s.toISOString().split('T')[0], end: e.toISOString().split('T')[0] });
+                                    }}>JUMP_TO_SELECTED_PEAK_WINDOW</button>
+                                </div>
+                                <div className="tag-pill" style={{ color: 'var(--primary)', borderColor: 'var(--primary)' }}>{ticker} / {filterDate}</div>
                             </div>
-                            <div className="tag-pill" style={{ color: 'var(--primary)', borderColor: 'var(--primary)' }}>{ticker} / {filterDate}</div>
-                        </div>
-                    </header>
+                        </header>
+                    </div>
 
                     <div className="main-container" style={{ '--sidebar-w': `${sidebarWidth}px` }}>
                         <aside
