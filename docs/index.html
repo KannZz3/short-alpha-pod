@@ -2785,10 +2785,10 @@
                                     <select className="ticker-select" value={ticker} onChange={(e) => setTicker(e.target.value)}>
                                         {tickers.map(t => <option key={t} value={t}>{t}</option>)}
                                     </select>
+                                    <button className="diag-btn" onClick={(e) => toggleDiag(e)} title="Diagnostics [D]" style={{ marginLeft: 6 }}>⚙︎</button>
                                 </div>
 
                                 <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                                    <button className="diag-btn" onClick={(e) => toggleDiag(e)} title="Diagnostics [D]">⚙︎</button>
                                     <div id="diagnostic-overlay" className="collapsed" onClick={(e) => e.stopPropagation()}>
                                         <div className="diag-header">
                                             <span>DIAGNOSTICS</span>
