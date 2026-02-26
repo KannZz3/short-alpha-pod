@@ -293,8 +293,9 @@
             }
 
             .main-container {
-                grid-template-columns: 1fr;
+                grid-template-columns: 1fr !important;
                 height: auto;
+                min-height: 0;
             }
 
             aside {
@@ -303,6 +304,8 @@
                 width: 100% !important;
                 max-height: none !important;
                 overflow-y: visible !important;
+                margin-bottom: 1.5rem;
+                /* Gap between navigator and main */
             }
 
             main {
@@ -312,6 +315,7 @@
 
             .stat-grid {
                 grid-template-columns: 1fr !important;
+                margin-top: 1rem;
             }
 
             .chart-box {
@@ -321,7 +325,38 @@
 
             .chart-box svg {
                 min-width: 600px;
-                /* Ensure chart remains readable */
+            }
+        }
+
+        /* Mobile specific header wrapping (<= 520px) */
+        @media (max-width: 520px) {
+            header {
+                flex-direction: column !important;
+                align-items: stretch !important;
+            }
+
+            .logo-area {
+                width: 100%;
+                justify-content: space-between;
+                margin-bottom: 0.5rem;
+            }
+
+            header>div:last-child {
+                width: 100%;
+                justify-content: space-between;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+            }
+
+            .range-picker {
+                flex: 1;
+                min-width: 180px;
+            }
+
+            .tag-pill {
+                min-width: 140px;
+                justify-content: center;
+                flex: 1;
             }
         }
 
@@ -1420,7 +1455,7 @@
             }
 
             return (
-                <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg)', color: 'var(--text)' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)' }}>
                     {/* Share / Resume Header */}
                     <div style={{
                         background: 'rgba(16, 185, 129, 0.05)',
@@ -1722,17 +1757,6 @@
                                     </div>
                                 )}
 
-                                <div style={{ position: 'absolute', bottom: 5, left: 10, display: 'flex', gap: 15, fontSize: '0.6rem', opacity: 0.6 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                        <div style={{ width: 8, height: 8, background: '#10b981' }}></div> Pos Sent
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                        <div style={{ width: 8, height: 8, background: '#ef4444' }}></div> Neg Sent
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                        <div style={{ width: 8, height: 8, background: '#3b82f6' }}></div> Noise
-                                    </div>
-                                </div>
                             </div>
 
                             <div className="glass" style={{ padding: '1.5rem' }}>
@@ -2204,15 +2228,19 @@
                         </main>
                     </div>
 
-                    {/* Footer */}
+                    {/* Global Footer - Optimized for Mobile & Desktop */}
                     <footer style={{
-                        padding: '10px 20px',
+                        padding: '20px',
+                        paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
                         borderTop: '1px solid var(--border)',
-                        background: 'var(--surface)',
-                        fontSize: '0.6rem',
+                        background: 'rgba(3, 7, 18, 0.4)',
+                        fontSize: '0.65rem',
                         display: 'flex',
+                        flexWrap: 'wrap',
                         justifyContent: 'space-between',
-                        opacity: 0.7
+                        gap: '1rem',
+                        opacity: 0.7,
+                        marginTop: 'auto'
                     }}>
                         <div>&copy; 2026 Short-Alpha Pod | Quant Synthesis Matrix</div>
                         <div style={{ fontWeight: 800, color: 'var(--primary)' }}>DEMO MODE — NO API KEYS EXPOSED</div>
