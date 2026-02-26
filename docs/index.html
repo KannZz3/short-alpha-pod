@@ -1825,6 +1825,84 @@
                     utilization_proxy: parseFloat(Math.min(100, siPct * 2.5).toFixed(2)),
                     proxy_label: 'PROXY — computed from SI% / avg_float_turnover. NOT real borrow cost data.'
                 };
+            },
+            // Red flag = News trigger day computed from per-day aggregated news_signal within selected window.
+            // Root cause of overlap was Case A (per-item, not per-day) + Case D (key by index, not dayKey).
+            // This function ensures at most ONE flag per unique calendar day in UTC.
+            getNewsSignalFlags: (ticker, windowStart, windowEnd) => {
+                // Normalize timestamp to YYYY-MM-DD in UTC (NOT local time)
+                const normDayKey = (ts) => {
+                    if (!ts) return null;
+                    const s = String(ts);
+                    // Already ISO date
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+                    // Has time component — parse as UTC
+                    const d = new Date(s.includes('T') ? s : s + 'T00:00:00Z');
+                    if (isNaN(d.getTime())) return null;
+                    return d.toISOString().split('T')[0];
+                };
+
+                const news = DataHub._newsCache.filter(n => n.ticker === ticker);
+                const wStart = normDayKey(windowStart);
+                const wEnd = normDayKey(windowEnd);
+
+                // Per-day bucket: sum |shock| (or 1 if no shock field — consistent with news_volume)
+                const daySignal = {}; // dayKey -> { sum, count, maxShock }
+                news.forEach(n => {
+                    const dk = normDayKey(n.published_at_utc);
+                    if (!dk) return;
+                    if (wStart && dk < wStart) return;
+                    if (wEnd && dk > wEnd) return;
+                    const shock = Math.abs(n.metrics?.shock || n.metrics?.sentiment || 0);
+                    if (!daySignal[dk]) daySignal[dk] = { sum: 0, count: 0, max: 0 };
+                    daySignal[dk].sum += shock;
+                    daySignal[dk].count += 1;
+                    daySignal[dk].max = Math.max(daySignal[dk].max, shock);
+                });
+
+                const days = Object.keys(daySignal);
+                if (days.length === 0) return [];
+
+                // Z-score threshold >= 1.5 to identify trigger days
+                const sums = days.map(dk => daySignal[dk].sum);
+                const mean = sums.reduce((a, b) => a + b, 0) / sums.length;
+                const std = Math.sqrt(sums.reduce((a, b) => a + (b - mean) ** 2, 0) / sums.length) || 1;
+                const Z_THRESH = 1.5;
+
+                // One flag per trigger day — deduped by dayKey (Map ensures uniqueness)
+                const flagMap = new Map();
+                days.forEach(dk => {
+                    const z = (daySignal[dk].sum - mean) / std;
+                    if (z >= Z_THRESH) {
+                        flagMap.set(dk, {
+                            dayKey: dk,
+                            magnitude: parseFloat(daySignal[dk].sum.toFixed(3)),
+                            z: parseFloat(z.toFixed(2)),
+                            reason: 'NEWS_SPIKE',
+                        });
+                    }
+                });
+
+                // Also include days where swan was detected (from swanDays in computeRealIndices)
+                // We re-derive them here from evidence for standalone use
+                const SWAN_TAGS = new Set(['regulatory', 'fraud', 'liquidity', 'lawsuit', 'halt', 'bankruptcy', 'sec', 'downgrade']);
+                news.forEach(n => {
+                    const dk = normDayKey(n.published_at_utc);
+                    if (!dk) return;
+                    if (wStart && dk < wStart) return;
+                    if (wEnd && dk > wEnd) return;
+                    const tags = (n.tags || []).map(t => String(t).toLowerCase());
+                    const shock = Math.abs(n.metrics?.shock || 0);
+                    if (tags.some(t => SWAN_TAGS.has(t)) || shock > 5) {
+                        if (!flagMap.has(dk)) {
+                            flagMap.set(dk, { dayKey: dk, magnitude: shock, z: 0, reason: 'SWAN_TAG' });
+                        } else {
+                            flagMap.get(dk).reason = 'NEWS_SPIKE+SWAN';
+                        }
+                    }
+                });
+
+                return Array.from(flagMap.values()).sort((a, b) => a.dayKey.localeCompare(b.dayKey));
             }
         };
 
@@ -2946,14 +3024,67 @@
                                         <rect key={i} x={getX(i) - 2} y={height - p - 10} width={4} height={4} fill="#555" opacity={0.3} />
                                     )))}
 
-                                    {/* Swan Markers */}
-                                    {safeArr(filteredData).map((d, i) => d.swan === 1 && (
-                                        runSafe('enableBlackSwanClickLinking', () => (
-                                            <g key={`swan-${i}`} transform={`translate(${getX(i)}, ${p + 10})`} style={{ cursor: 'pointer' }} onClick={() => { setSelectedDate(d.d); setTab('evidence'); }}>
-                                                <circle r="8" fill="rgba(239,68,68,0.2)" />
-                                                <Icons.Flag color="#ef4444" />
-                                            </g>
-                                        ), <g key={`swan-leg-${i}`} transform={`translate(${getX(i)}, ${p + 10})`}><circle r="4" fill="#ef4444" opacity="0.5" /></g>)
+                                    {/* Swan/News Flag Markers
+                                         Root cause of overlap was:
+                                         - Case A: per-item (per-CSV-row) instead of per-day
+                                         - Case D: React key was index i, not stable dayKey
+                                         Fix: use DataHub.getNewsSignalFlags() for per-day bucketing.
+                                         At most ONE flag per unique calendar-day within the window. */}
+                                    {runSafe('enableBlackSwanClickLinking', () => {
+                                        // Build flag set: deduped per calendar day in utc
+                                        const winStart = activePeak?.windowStart || filteredData[0]?.d;
+                                        const winEnd = activePeak?.windowEnd || filteredData[filteredData.length - 1]?.d;
+                                        const newsFlags = DataHub.getNewsSignalFlags(ticker, winStart, winEnd);
+
+                                        // Also collect per-day swan markers from filteredData (from computeRealIndices)
+                                        // Dedupe: one entry per dayKey using a Map
+                                        const swanMap = new Map();
+                                        safeArr(filteredData).forEach((d, i) => {
+                                            if (d.swan === 1 && !swanMap.has(d.d)) swanMap.set(d.d, i);
+                                        });
+
+                                        // Merge newsFlags + swanMap into a unified deduped set
+                                        const allDayKeys = new Map(); // dayKey -> { idx, reason, isSwanFromData }
+                                        newsFlags.forEach(f => {
+                                            const idx = filteredData.findIndex(d => d.d === f.dayKey);
+                                            if (idx >= 0) allDayKeys.set(f.dayKey, { idx, reason: f.reason, z: f.z, isSwanFromData: false });
+                                        });
+                                        swanMap.forEach((idx, dayKey) => {
+                                            if (!allDayKeys.has(dayKey)) allDayKeys.set(dayKey, { idx, reason: 'SWAN_TAG', z: 0, isSwanFromData: true });
+                                            else allDayKeys.get(dayKey).isSwanFromData = true;
+                                        });
+
+                                        return (<>
+                                            {Array.from(allDayKeys.entries()).map(([dayKey, { idx, reason, isSwanFromData }]) => {
+                                                const cx = getX(idx);
+                                                // Stable key: ticker + window + dayKey (never just index)
+                                                const stableKey = `${ticker}-${winStart}-${winEnd}-${dayKey}-FLAG`;
+                                                const yPos = p + (isSwanFromData ? 8 : 12); // slight y-offset for SWAN vs NEWS
+                                                return (
+                                                    <g key={stableKey}
+                                                        transform={`translate(${cx}, ${yPos})`}
+                                                        style={{ cursor: 'pointer' }}
+                                                        onClick={() => { setSelectedDate(dayKey); setTab('evidence'); }}
+                                                    >
+                                                        <circle r="8" fill="rgba(239,68,68,0.2)" />
+                                                        <Icons.Flag color={reason.includes('SWAN') ? '#ef4444' : '#f59e0b'} />
+                                                    </g>
+                                                );
+                                            })}
+                                        </>);
+                                    }, (
+                                        // Fallback when flag disabled: deduped dots without interaction
+                                        (() => {
+                                            const seen = new Set();
+                                            return safeArr(filteredData).filter(d => {
+                                                if (d.swan !== 1 || seen.has(d.d)) return false;
+                                                seen.add(d.d);
+                                                return true;
+                                            }).map(d => {
+                                                const idx = filteredData.indexOf(d);
+                                                return <g key={`swan-leg-${d.d}`} transform={`translate(${getX(idx)}, ${p + 10})`}><circle r="4" fill="#ef4444" opacity="0.5" /></g>;
+                                            });
+                                        })()
                                     ))}
 
                                     <path d={path} fill="none" stroke="#10b981" strokeWidth="2" vectorEffect="non-scaling-stroke" />
