@@ -3390,7 +3390,13 @@
                                             {/* Institutional Column */}
                                             <div style={{ minWidth: 0 }}>
                                                 <h3 style={{ fontSize: '0.75rem', borderBottom: '2px solid #3b82f6', display: 'flex', justifyContent: 'space-between', paddingBottom: 5, marginBottom: 12 }}>
-                                                    INSTITUTIONAL SIGNAL <span>{evidence.stats?.newsUnique || 0} UNIQUE</span>
+                                                    INSTITUTIONAL SIGNAL
+                                                    <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                                        <span>{evidence.stats?.newsUnique || 0} UNIQUE</span>
+                                                        <span style={{ fontSize: '0.5rem', fontWeight: 800, padding: '1px 5px', borderRadius: 2, border: `1px solid ${DataHub._liveNewsLoaded ? '#10b981' : '#fbbf24'}`, color: DataHub._liveNewsLoaded ? '#10b981' : '#fbbf24' }}>
+                                                            {DataHub._liveNewsLoaded ? 'LIVE' : 'DEMO'}
+                                                        </span>
+                                                    </span>
                                                 </h3>
                                                 {evidence.stats && !evidence.stats.newsPassedDiv && evidence.news.length > 0 && (
                                                     <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#f59e0b', padding: '6px 12px', borderRadius: 4, fontSize: '0.65rem', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -3447,7 +3453,13 @@
                                             {/* Retail Column */}
                                             <div style={{ minWidth: 0 }}>
                                                 <h3 style={{ fontSize: '0.75rem', borderBottom: '2px solid #8b5cf6', display: 'flex', justifyContent: 'space-between', paddingBottom: 5, marginBottom: 12 }}>
-                                                    RETAIL SENTIMENT <span>{evidence.stats?.retUnique || 0} UNIQUE</span>
+                                                    RETAIL SENTIMENT
+                                                    <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                                        <span>{evidence.stats?.retUnique || 0} UNIQUE</span>
+                                                        <span style={{ fontSize: '0.5rem', fontWeight: 800, padding: '1px 5px', borderRadius: 2, border: `1px solid ${DataHub._liveRetailLoaded ? '#10b981' : '#fbbf24'}`, color: DataHub._liveRetailLoaded ? '#10b981' : '#fbbf24' }}>
+                                                            {DataHub._liveRetailLoaded ? 'LIVE' : 'DEMO'}
+                                                        </span>
+                                                    </span>
                                                 </h3>
                                                 {evidence.stats && !evidence.stats.retPassedDiv && evidence.retail.length > 0 && (
                                                     <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#f59e0b', padding: '6px 12px', borderRadius: 4, fontSize: '0.65rem', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -3465,7 +3477,7 @@
                                                 {safeArr(evidence.retail).map((r, i) => {
                                                     const isNew = true;
                                                     const r_p = r.provider || r.p;
-                                                    const isDemo = r.quality_flags ? r.quality_flags.includes("DEMO_INPUT_MISSING") : r.demo;
+                                                    const isDemo = r.mode === 'DEMO' || (r.quality_flags ? r.quality_flags.includes('DEMO_PLACEHOLDER') : false);
                                                     const r_d = r.published_at_utc ? r.published_at_utc.split('T')[0] : r.d;
                                                     const r_tags = r.tags;
                                                     const r_hype = r.metrics ? Math.round(r.metrics.sentiment * 100) : r.hype;
@@ -3579,7 +3591,8 @@
                                                     </div>
                                                     <div className="glass" style={{ padding: '0.8rem', textAlign: 'center' }}>
                                                         <div style={{ fontSize: '0.55rem', opacity: 0.6 }}>R_THRESHOLD</div>
-                                                        <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#3b82f6' }}>0.65</div>
+                                                        <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#3b82f6' }}>0.4</div>
+                                                        <div style={{ fontSize: '0.5rem', opacity: 0.5 }}>lagSI &gt; 0.4 → PASS</div>
                                                     </div>
                                                     <div className="glass" style={{ padding: '0.8rem', textAlign: 'center' }}>
                                                         <div style={{ fontSize: '0.55rem', opacity: 0.6 }}>HYPOTHESIS</div>
@@ -3600,7 +3613,8 @@
                                                                 <CorrelationItem label="Noise → Squeeze" val={validation.same?.noise_squeeze} />
                                                             </div>
                                                             <div className="glass" style={{ padding: '0.8rem' }}>
-                                                                <div style={{ fontSize: '0.65rem', fontWeight: 800, marginBottom: 10 }}>LAG_48H (T+2)</div>
+                                                                <div style={{ fontSize: '0.65rem', fontWeight: 800, marginBottom: 6 }}>LAG_48H (T+2)</div>
+                                                                <div style={{ fontSize: '0.5rem', opacity: 0.5, marginBottom: 8, fontFamily: 'JetBrains Mono' }}>Pearson(Noise[t], SI[t+2])</div>
                                                                 <CorrelationItem label="Noise → SI%" val={validation.lag48?.noise_si} />
                                                                 <CorrelationItem label="Noise → Crowded" val={validation.lag48?.noise_crowded} />
                                                             </div>
