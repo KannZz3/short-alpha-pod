@@ -2857,19 +2857,35 @@
                             </div>
 
                             <div className="mobile-header-row" style={{ marginTop: '0.25rem' }}>
-                                <div className="range-picker">
-                                    <input type="text" value={range.start} onChange={(e) => setRange({ ...range, start: e.target.value })} />
-                                    <span style={{ opacity: 0.5 }}>–</span>
-                                    <input type="text" value={range.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
-                                    <button className="range-btn" onClick={() => {
-                                        const d = new Date(activePeak.date);
-                                        const s = new Date(d); s.setDate(d.getDate() - 10);
-                                        const e = new Date(d); e.setDate(d.getDate() + 10);
-                                        setRange({ start: s.toISOString().split('T')[0], end: e.toISOString().split('T')[0] });
-                                    }}>
-                                        <span className="desktop-only" style={{ display: 'inline' }}>JUMP_TO_SELECTED_PEAK_WINDOW</span>
-                                        <span className="mobile-only" style={{ display: 'none' }}>JUMP</span>
-                                    </button>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                    {tab === 'synthetic' && (
+                                        <div style={{ fontSize: '0.5rem', opacity: 0.55, letterSpacing: '0.04em' }}>OBSERVED RANGE (CSV CALIBRATION):</div>
+                                    )}
+                                    <div className="range-picker">
+                                        <input type="text" value={range.start} onChange={(e) => setRange({ ...range, start: e.target.value })} />
+                                        <span style={{ opacity: 0.5 }}>–</span>
+                                        <input type="text" value={range.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
+                                        <button className="range-btn" onClick={() => {
+                                            const d = new Date(activePeak.date);
+                                            const s = new Date(d); s.setDate(d.getDate() - 10);
+                                            const e = new Date(d); e.setDate(d.getDate() + 10);
+                                            setRange({ start: s.toISOString().split('T')[0], end: e.toISOString().split('T')[0] });
+                                        }}>
+                                            <span className="desktop-only" style={{ display: 'inline' }}>{tab === 'synthetic' ? 'Jump to Peak Window (Observed)' : 'JUMP_TO_SELECTED_PEAK_WINDOW'}</span>
+                                            <span className="mobile-only" style={{ display: 'none' }}>JUMP</span>
+                                        </button>
+                                    </div>
+                                    {tab === 'synthetic' && activePeak?.date && (() => {
+                                        const anchor = activePeak.date;
+                                        const endDt = new Date(anchor);
+                                        endDt.setDate(endDt.getDate() + 1094);
+                                        const endStr = endDt.toISOString().split('T')[0];
+                                        return (
+                                            <div style={{ fontSize: '0.5rem', opacity: 0.55, letterSpacing: '0.04em' }}>
+                                                SYNTHETIC RANGE (1095d):&nbsp;<span style={{ color: 'var(--primary)', fontWeight: 700 }}>{anchor} — {endStr}</span>
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                                 <div className="tag-pill-mobile-hide" style={{
                                     display: 'inline-block',
@@ -2882,7 +2898,7 @@
                                     color: 'var(--primary)',
                                     borderColor: 'var(--primary)',
                                     whiteSpace: 'nowrap'
-                                }}>{ticker} / {filterDate}</div>
+                                }}>{tab === 'synthetic' ? `Peak Anchor: ${ticker} @ ${filterDate}` : `${ticker} / ${filterDate}`}</div>
                             </div>
                         </header>
                     </div>
