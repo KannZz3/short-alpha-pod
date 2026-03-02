@@ -1172,8 +1172,8 @@
                         }
                     }
                     if (!tooClose) {
-                        const winStart = new Date(rowDate); winStart.setDate(rowDate.getDate() - 10);
-                        const winEnd = new Date(rowDate); winEnd.setDate(rowDate.getDate() + 10);
+                        const winStart = new Date(rowDate); winStart.setDate(rowDate.getDate() - 21);
+                        const winEnd = new Date(rowDate); winEnd.setDate(rowDate.getDate() + 21);
                         uniquePeaks.push({
                             date: row.d,
                             val: row[sortKey],
@@ -1448,8 +1448,8 @@
             },
             computeSubsetValidation: (ticker, subset, scopeName, peakDate) => {
                 const safeSubset = safeArr(subset);
-                const n = safeSubset.length;
-                if (n < 6) return { error: "INSUFFICIENT DATA" };
+                const totalRows = safeSubset.length;
+                if (totalRows < 6) return { error: "INSUFFICIENT DATA", n: 0, sample_size_n: 0, reason_flags: ["INSUFFICIENT_PAIRED_OBSERVATIONS"] };
 
                 // Real Pearson Correlation math
                 const pearson = DataHub._pearson;
@@ -1459,10 +1459,33 @@
                 const si = safeSubset.map(d => d.si);
                 const crowded = safeSubset.map(d => d.crowded);
 
-                // Lag 48h (t+2 rows)
-                const noise_l = noise.slice(0, n - 2);
+                // Lag 48h alignment: noise[t] paired with si[t+2]
+                // noise_l has (totalRows - 2) entries; si_l is offset 2 forward.
+                const noise_l = noise.slice(0, totalRows - 2);
                 const si_l = si.slice(2);
                 const crowded_l = crowded.slice(2);
+
+                // Sample Size N = count of valid finite paired observations used in Pearson(noise_t, si_{t+2}).
+                // A valid pair requires BOTH noise_index[t] AND si[t+2] to be finite (non-NaN, non-Inf).
+                // This is the canonical N displayed in the SAMPLE SIZE (N) card and LAG_N debug line.
+                let sample_size_n = 0;
+                for (let i = 0; i < noise_l.length; i++) {
+                    if (isFinite(noise_l[i]) && isFinite(si_l[i])) sample_size_n++;
+                }
+                const missing_noise_days = noise_l.filter(v => !isFinite(v)).length;
+                const missing_si_days = si_l.filter(v => !isFinite(v)).length;
+                const reason_flags = sample_size_n === 0 ? ["INSUFFICIENT_PAIRED_OBSERVATIONS"] : [];
+                const droppedPairs = (totalRows - 2) - sample_size_n;
+
+                // N_PROOF: single source of truth diagnostic log for Sample Size verification
+                console.debug('[N_PROOF]', {
+                    ticker, scope: scopeName, peak: peakDate,
+                    window_start: safeSubset[0]?.d, window_end: safeSubset[safeSubset.length-1]?.d,
+                    rows_in_window: totalRows, lag_edge_loss: 2,
+                    rows_after_lag: totalRows - 2,
+                    missing_noise_days, missing_si_days,
+                    paired_rows: sample_size_n, n_final: sample_size_n
+                });
 
                 const lagSI = pearson(noise_l, si_l);
                 const lagCrowded = pearson(noise_l, crowded_l);
@@ -1474,7 +1497,21 @@
                     hypothesis: lagSI > 0.4 ? "PASS" : "FAIL",
                     interpretation: `Evidence for ${ticker} shows a lag correlation of ${lagSI.toFixed(2)} between Noise and SI.`,
                     tradableProb: 0.5 + Math.abs(lagSI) * 0.4,
-                    hitRate: 0.6 + Math.abs(lagSI) * 0.2
+                    hitRate: 0.6 + Math.abs(lagSI) * 0.2,
+                    // N = count of finite (noise_t, si_{t+2}) pairs used in primary Pearson test
+                    n: sample_size_n,
+                    sample_size_n,
+                    pairs_used: sample_size_n,
+                    window_start: safeSubset[0]?.d,
+                    window_end: safeSubset[safeSubset.length - 1]?.d,
+                    scope: scopeName,
+                    dropped: droppedPairs,
+                    rows_in_window: totalRows,
+                    lag_edge_loss: 2,
+                    missing_noise_days,
+                    missing_si_days,
+                    reason_flags,
+                    fingerprint: DataHub.getFingerprint(safeSubset),
                 };
             },
             getCrossTickerSummary: (tickers) => {
@@ -2561,8 +2598,8 @@
 
                 if (lagScope === 'peak' && activePeak) {
                     const d = new Date(activePeak.date);
-                    const sArr = new Date(d); sArr.setDate(d.getDate() - 10);
-                    const eArr = new Date(d); eArr.setDate(d.getDate() + 10);
+                    const sArr = new Date(d); sArr.setDate(d.getDate() - 21);
+                    const eArr = new Date(d); eArr.setDate(d.getDate() + 21);
                     start = sArr.toISOString().split('T')[0];
                     end = eArr.toISOString().split('T')[0];
                     subset = merged.filter(d => d.d >= start && d.d <= end);
@@ -2962,7 +2999,8 @@
                                     <div>EV_WINDOW: <strong>{evidence.news.length} N / {evidence.retail.length} R</strong></div>
                                     <div style={{ color: '#8b5cf6', fontWeight: 800, marginTop: 4 }}>LAG_SCOPE: {lagScope.toUpperCase()}</div>
                                     <div>LAG_WINDOW: <strong>{validation.window?.start} / {validation.window?.end}</strong></div>
-                                    <div>LAG_N: <strong>{validation.n}</strong></div>
+                                    <div>LAG_N: <strong>{validation.n ?? 0}</strong> | scope:{(validation.scope || lagScope).toUpperCase()} | window:{validation.window?.start ?? '?'}/{validation.window?.end ?? '?'} | dropped:{validation.dropped ?? 0}</div>
+                                    {(validation.n ?? 0) < 8 && <div style={{ color: '#f59e0b', fontSize: '0.45rem', marginTop: 2 }}>LOW_N: window_rows={validation.rows_in_window ?? '?'} | lag_edge={validation.lag_edge_loss ?? 2} | miss_noise={validation.missing_noise_days ?? 0} | miss_si={validation.missing_si_days ?? 0}</div>}
                                     <div>LAG_CORR: <strong>{validation.lag48?.noise_si.toFixed(4)}</strong></div>
                                     <div style={{ fontSize: '0.45rem', opacity: 0.5 }}>FP: {validation.fingerprint}</div>
                                     {/* Block4-A: Borrow cost proxy display */}
