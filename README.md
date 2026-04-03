@@ -3,7 +3,7 @@
 A high-fidelity quantitative analysis terminal for detecting short-squeeze precursors and validating lag correlations.
 
 ## 🚀 Live Demo
-[Link Placeholder: e.g.,(https://kannzz3.github.io/short-alpha-pod/)]
+[Link Placeholder: (https://kannzz3.github.io/short-alpha-pod/)]
 
 ## 📦 GitHub Pages Deployment
 This project is configured to deploy via the `/docs` folder on the `main` branch.
